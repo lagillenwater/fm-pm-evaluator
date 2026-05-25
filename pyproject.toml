@@ -70,6 +70,17 @@ include = ["src", "tests"]
 strictListInference = true
 strictDictionaryInference = true
 strictSetInference = true
+# pandas, anndata, pydeseq2, synapseclient, etc. do not ship PEP-561 type stubs.
+# Strict mode therefore cascades into hundreds of reportUnknown* errors that
+# are noise from missing stubs, not real type issues. Silence the cascade
+# while keeping the rules pyright can actually check on our own code
+# (typos, missing returns, wrong literal types, schema constraints, etc.).
+reportMissingTypeStubs = false
+reportUnknownMemberType = "none"
+reportUnknownArgumentType = "none"
+reportUnknownVariableType = "none"
+reportUnknownLambdaType = "none"
+reportUnknownParameterType = "none"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
