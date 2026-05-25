@@ -18,7 +18,7 @@ upstream if that fold isn't useful.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from typing import Literal
 
 from fmharness.splits.base import SplitFold, SplittablePatient
@@ -55,7 +55,7 @@ class LeaveSubtypeOut:
             return subtype
         return self.subtype_map.get(subtype, subtype)
 
-    def split(self, patients: list[SplittablePatient]) -> Iterator[SplitFold]:
+    def split(self, patients: Sequence[SplittablePatient]) -> Iterator[SplitFold]:
         if len(patients) < 2:
             raise ValueError(f"need >= 2 patients for LSO; got {len(patients)}")
         # Group patient_ids by their (mapped) subtype

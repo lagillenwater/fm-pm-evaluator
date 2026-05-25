@@ -8,7 +8,7 @@ on either dataset.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import pytest
@@ -18,6 +18,7 @@ from fmharness.splits import (
     LeaveSubtypeOut,
     MissingSplitError,
     SplitFold,
+    Splitter,
     StratifiedInDistribution,
     require_split,
 )
@@ -52,13 +53,6 @@ def _no_overlap(fold: SplitFold) -> None:
     assert not (set(fold.train_patient_ids) & set(fold.test_patient_ids)), (
         f"fold {fold.fold_id} has patient_id(s) in both train and test"
     )
-
-
-def _covers(folds: Iterable[SplitFold], expected_ids: set[str]) -> set[str]:
-    seen: set[str] = set()
-    for f in folds:
-        seen |= set(f.test_patient_ids)
-    return seen
 
 
 # ---------------------------------------------------------------------------
@@ -275,7 +269,7 @@ def test_require_split_rejects_missing_name() -> None:
         lambda: StratifiedInDistribution(seed=0, n_splits=3),
     ],
 )
-def test_no_patient_overlap_any_splitter(splitter_factory) -> None:
+def test_no_patient_overlap_any_splitter(splitter_factory: Callable[[], Splitter]) -> None:
     pats = _cohort_balanced()
     for fold in splitter_factory().split(pats):
         _no_overlap(fold)

@@ -8,7 +8,7 @@ deterministic given the patient set) -- it exists to flow into the
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 
 from fmharness.splits.base import SplitFold, SplittablePatient
 
@@ -21,7 +21,7 @@ class LeavePatientOut:
     def __init__(self, *, seed: int) -> None:
         self.seed = seed
 
-    def split(self, patients: list[SplittablePatient]) -> Iterator[SplitFold]:
+    def split(self, patients: Sequence[SplittablePatient]) -> Iterator[SplitFold]:
         if len(patients) < 2:
             raise ValueError(f"need >= 2 patients for LPO; got {len(patients)}")
         ids = [p.patient_id for p in patients]

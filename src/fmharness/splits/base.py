@@ -11,7 +11,7 @@ The seed is recorded on every ``SplitFold`` so it flows verbatim into the
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
@@ -55,7 +55,7 @@ class Splitter(Protocol):
     name: str
     seed: int
 
-    def split(self, patients: list[SplittablePatient]) -> Iterator[SplitFold]: ...
+    def split(self, patients: Sequence[SplittablePatient]) -> Iterator[SplitFold]: ...
 
 
 class MissingSplitError(ValueError):

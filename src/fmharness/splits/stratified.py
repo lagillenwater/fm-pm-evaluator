@@ -7,7 +7,7 @@ grouped under ``"__missing__"`` and stratified alongside the others.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 
 from sklearn.model_selection import StratifiedKFold
 
@@ -27,7 +27,7 @@ class StratifiedInDistribution:
         self.seed = seed
         self.n_splits = n_splits
 
-    def split(self, patients: list[SplittablePatient]) -> Iterator[SplitFold]:
+    def split(self, patients: Sequence[SplittablePatient]) -> Iterator[SplitFold]:
         if len(patients) < self.n_splits:
             raise ValueError(f"cannot do {self.n_splits}-fold split on {len(patients)} patients")
         ids = [p.patient_id for p in patients]

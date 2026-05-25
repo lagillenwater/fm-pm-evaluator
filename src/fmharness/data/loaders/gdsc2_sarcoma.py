@@ -37,12 +37,14 @@ import re
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
+from typing import cast
 
 import anndata as ad
 import numpy as np
 import pandas as pd
 from pydeseq2.dds import DeseqDataSet
 
+from fmharness.data._pandas_utils import maybe_int, maybe_str
 from fmharness.data.drug_xref import load_drug_xref
 from fmharness.schema import (
     BaselineExpression,
@@ -108,23 +110,27 @@ def load_gdsc2_sarcoma(
 
     # ---- Step 2: sarcoma model filter ----
     model_df = pd.read_csv(model_path, low_memory=False)
-    sarcoma_models = model_df[model_df["OncotreeLineage"].isin(SARCOMA_LINEAGES)].copy()
+    sarcoma_models = cast(
+        pd.DataFrame, model_df[model_df["OncotreeLineage"].isin(list(SARCOMA_LINEAGES))].copy()
+    )
     sarcoma_models = sarcoma_models.dropna(subset=["COSMICID"])
     sarcoma_models["COSMICID"] = sarcoma_models["COSMICID"].astype(int)
 
     # ---- Step 3: GDSC2 dose-response filter ----
     gdsc_df = pd.read_excel(gdsc_path, sheet_name=0)
-    sarcoma_cosmic = set(sarcoma_models["COSMICID"])
-    gdsc_sarcoma = gdsc_df[gdsc_df["COSMIC_ID"].isin(sarcoma_cosmic)].copy()
-    cohort_cosmic = set(gdsc_sarcoma["COSMIC_ID"].astype(int).unique())
-    cohort_models = sarcoma_models[sarcoma_models["COSMICID"].isin(cohort_cosmic)].copy()
+    sarcoma_cosmic = list(sarcoma_models["COSMICID"])
+    gdsc_sarcoma = cast(pd.DataFrame, gdsc_df[gdsc_df["COSMIC_ID"].isin(sarcoma_cosmic)].copy())
+    cohort_cosmic = list(gdsc_sarcoma["COSMIC_ID"].astype(int).unique())
+    cohort_models = cast(
+        pd.DataFrame, sarcoma_models[sarcoma_models["COSMICID"].isin(cohort_cosmic)].copy()
+    )
 
     # ---- Step 4: slice expression matrix to cohort ACH IDs ----
     # The CSV has a leading unnamed numeric index column; absorb it via index_col=0.
     expr_raw = pd.read_csv(expr_path, index_col=0)
     # Dedupe to one row per ModelID (DepMap publishes multiple sequencing reps; one is flagged
     # as the canonical entry for the Model).
-    expr_default = expr_raw[expr_raw["IsDefaultEntryForModel"] == "Yes"].copy()
+    expr_default = cast(pd.DataFrame, expr_raw[expr_raw["IsDefaultEntryForModel"] == "Yes"].copy())
     expr_default = expr_default.set_index("ModelID")
     gene_cols = [c for c in expr_default.columns if c not in _DEPMAP_METADATA_COLS]
 
@@ -134,7 +140,9 @@ def load_gdsc2_sarcoma(
             "no overlap between sarcoma cohort (from Model.csv+GDSC2) and DepMap RNA-seq"
         )
     expr_cohort = expr_default.loc[cohort_ach, gene_cols].astype(int)
-    cohort_models = cohort_models[cohort_models["ModelID"].isin(cohort_ach)].copy()
+    cohort_models = cast(
+        pd.DataFrame, cohort_models[cohort_models["ModelID"].isin(cohort_ach)].copy()
+    )
     cohort_models = cohort_models.set_index("ModelID").loc[cohort_ach]
 
     # ---- Step 5: pydeseq2 median-of-ratios ----
@@ -180,7 +188,7 @@ def load_gdsc2_sarcoma(
 
     # ---- Step 6: drug xref ----
     xref = load_drug_xref(repo_root / "data" / "static")
-    gdsc_xref = xref[xref["source"] == "gdsc2"]
+    gdsc_xref = cast(pd.DataFrame, xref[xref["source"] == "gdsc2"])
     # Map drug_name (lowercased) -> first row of xref metadata
     gdsc_xref_unique = gdsc_xref.drop_duplicates(subset=["input_name"], keep="first")
     name_to_xref = gdsc_xref_unique.set_index(gdsc_xref_unique["input_name"].str.lower())
@@ -203,8 +211,8 @@ def load_gdsc2_sarcoma(
                 subtype_granularity="fine",
                 metadata={
                     "cosmic_id": int(row["COSMICID"]),
-                    "ccle_name": _maybe_str(row.get("CCLEName")),
-                    "sanger_model_id": _maybe_str(row.get("SangerModelID")),
+                    "ccle_name": maybe_str(row.get("CCLEName")),
+                    "sanger_model_id": maybe_str(row.get("SangerModelID")),
                 },
             )
         )
@@ -233,9 +241,9 @@ def load_gdsc2_sarcoma(
         xref_row = (
             name_to_xref.loc[drug_name.lower()] if drug_name.lower() in name_to_xref.index else None
         )
-        cid = _maybe_int(xref_row.get("pubchem_cid")) if xref_row is not None else None
-        inchikey = _maybe_str(xref_row.get("inchikey")) if xref_row is not None else None
-        drugbank = _maybe_str(xref_row.get("drugbank_id")) if xref_row is not None else None
+        cid = maybe_int(xref_row.get("pubchem_cid")) if xref_row is not None else None
+        inchikey = maybe_str(xref_row.get("inchikey")) if xref_row is not None else None
+        drugbank = maybe_str(xref_row.get("drugbank_id")) if xref_row is not None else None
 
         drug_assays.append(
             DrugAssay(
@@ -325,15 +333,3 @@ def _sha256(path: Path, chunk: int = 1 << 20) -> str:
         for block in iter(lambda: fh.read(chunk), b""):
             h.update(block)
     return h.hexdigest()
-
-
-def _maybe_str(v: object) -> str | None:
-    if v is None or (isinstance(v, float) and pd.isna(v)):
-        return None
-    return str(v)
-
-
-def _maybe_int(v: object) -> int | None:
-    if v is None or pd.isna(v):
-        return None
-    return int(v)

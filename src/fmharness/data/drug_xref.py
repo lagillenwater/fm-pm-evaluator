@@ -14,8 +14,11 @@ import hashlib
 import json
 from collections.abc import Iterable
 from pathlib import Path
+from typing import cast
 
 import pandas as pd
+
+from fmharness.data._pandas_utils import maybe_int
 
 XREF_REL_PATH = "drug_xref.parquet"
 MANIFEST_REL_PATH = "manifest.json"
@@ -74,11 +77,11 @@ def resolve_cid(xref: pd.DataFrame, name: str, source: str) -> int | None:
 
 def canonical_cids(xref: pd.DataFrame, names: Iterable[str], source: str) -> list[int | None]:
     """Vectorized ``resolve_cid``: return one CID (or None) per input name."""
-    lower_names = pd.Series(list(names)).str.lower()
-    sub = xref[xref["source"] == source].copy()
-    sub["_key"] = sub["input_name"].str.lower()
+    lower_names = [n.lower() for n in names]
+    sub = cast(pd.DataFrame, xref[xref["source"] == source].copy())
+    sub["_key"] = sub["input_name"].astype(str).str.lower()
     mapping = dict(zip(sub["_key"], sub["pubchem_cid"], strict=False))
-    return [None if pd.isna(c := mapping.get(k)) else int(c) for k in lower_names]
+    return [maybe_int(mapping.get(k)) for k in lower_names]
 
 
 def overlap_report(xref: pd.DataFrame) -> pd.DataFrame:
@@ -90,8 +93,8 @@ def overlap_report(xref: pd.DataFrame) -> pd.DataFrame:
     """
     resolved = xref.dropna(subset=["pubchem_cid"])
     by_cid = resolved.groupby("pubchem_cid")["source"].nunique()
-    both = by_cid[by_cid > 1].index
-    sub = resolved[resolved["pubchem_cid"].isin(both)]
+    both = list(cast(pd.Series, by_cid[by_cid > 1]).index)
+    sub = cast(pd.DataFrame, resolved[resolved["pubchem_cid"].isin(both)])
     out = (
         sub.groupby(["pubchem_cid", "source"])["input_name"]
         .apply(lambda s: ", ".join(sorted(set(s))))

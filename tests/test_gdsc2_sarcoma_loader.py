@@ -261,7 +261,9 @@ def test_loader_end_to_end(tmp_path: Path) -> None:
     assert list(bundle.expression.var.index) == ["TSPAN6", "TNMD", "DPM1"]
     assert "raw_counts" in bundle.expression.layers
     # DESeq2 normalized values are floats; raw counts are ints
-    assert bundle.expression.X.dtype.kind == "f"
+    X = bundle.expression.X
+    assert X is not None
+    assert X.dtype.kind == "f"
     assert bundle.expression.layers["raw_counts"].dtype.kind == "i"
     # size_factor populated per sample
     assert "size_factor" in bundle.expression.obs.columns

@@ -34,11 +34,13 @@ import re
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
+from typing import cast
 
 import anndata as ad
 import numpy as np
 import pandas as pd
 
+from fmharness.data._pandas_utils import maybe_int, maybe_str
 from fmharness.data.drug_xref import load_drug_xref
 from fmharness.schema import (
     BaselineExpression,
@@ -186,17 +188,17 @@ def load_soragni(
             "specimen": [spec for _, _, spec in cohort_samples],
             "ngc_column": cohort_cols,
         },
-        index=sample_ids,
+        index=pd.Index(sample_ids),
     )
 
-    adata = ad.AnnData(X=X, obs=obs, var=var)
+    adata = ad.AnnData(X=X, obs=obs, var=cast(pd.DataFrame, var))
     adata.uns["normalization"] = "median_of_ratios"
     adata.uns["source"] = SOURCE
     adata.uns["version"] = VERSION
 
     # ---- Step 5: drug xref ----
     xref = load_drug_xref(repo_root / "data" / "static")
-    soragni_xref = xref[xref["source"] == "soragni"]
+    soragni_xref = cast(pd.DataFrame, xref[xref["source"] == "soragni"])
     soragni_xref_unique = soragni_xref.drop_duplicates(subset=["input_name"], keep="first")
     name_to_xref = soragni_xref_unique.set_index(soragni_xref_unique["input_name"].str.lower())
 
@@ -256,7 +258,7 @@ def load_soragni(
     cohort_drug_rows = drug_screen[drug_screen["_patient"].isin(matched)]
     drug_assays: list[DrugAssay] = []
     for _, row in cohort_drug_rows.iterrows():
-        pat = row["_patient"]
+        pat = str(row["_patient"])
         organoid_sample = patient_to_organoid_sample.get(pat)
         if organoid_sample is None:
             # Patient is matched (has RNA-seq) but no Organoid specimen specifically.
@@ -267,9 +269,9 @@ def load_soragni(
         xref_row = (
             name_to_xref.loc[drug_name.lower()] if drug_name.lower() in name_to_xref.index else None
         )
-        cid = _maybe_int(xref_row.get("pubchem_cid")) if xref_row is not None else None
-        inchikey = _maybe_str(xref_row.get("inchikey")) if xref_row is not None else None
-        drugbank = _maybe_str(xref_row.get("drugbank_id")) if xref_row is not None else None
+        cid = maybe_int(xref_row.get("pubchem_cid")) if xref_row is not None else None
+        inchikey = maybe_str(xref_row.get("inchikey")) if xref_row is not None else None
+        drugbank = maybe_str(xref_row.get("drugbank_id")) if xref_row is not None else None
 
         # Soragni has no separate DRUG_ID column; use the drug name as drug_id too.
         # Downstream code joins to drug_xref on pubchem_cid for canonicalization.
@@ -349,15 +351,3 @@ def _sha256(path: Path, chunk: int = 1 << 20) -> str:
         for block in iter(lambda: fh.read(chunk), b""):
             h.update(block)
     return h.hexdigest()
-
-
-def _maybe_str(v: object) -> str | None:
-    if v is None or (isinstance(v, float) and pd.isna(v)):
-        return None
-    return str(v)
-
-
-def _maybe_int(v: object) -> int | None:
-    if v is None or pd.isna(v):
-        return None
-    return int(v)
