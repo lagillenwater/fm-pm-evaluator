@@ -1,19 +1,13 @@
-"""Per-dataset loaders that turn raw artifacts into validated tranches."""
+"""Per-dataset loaders that turn CoderData-shaped inputs into validated tranches."""
 
-from fmharness.data.loaders.gdsc2_sarcoma import (
-    GDSC2SarcomaBundle,
-    load_gdsc2_sarcoma,
-)
-from fmharness.data.loaders.soragni import (
-    SoragniBundle,
-    canonicalize_patient_id,
-    load_soragni,
+from fmharness.data.loaders.coderdata import (
+    CoderDataBundle,
+    IngestError,
+    load_coderdata_tranche,
 )
 
 __all__ = [
-    "GDSC2SarcomaBundle",
-    "SoragniBundle",
-    "canonicalize_patient_id",
-    "load_gdsc2_sarcoma",
-    "load_soragni",
+    "CoderDataBundle",
+    "IngestError",
+    "load_coderdata_tranche",
 ]

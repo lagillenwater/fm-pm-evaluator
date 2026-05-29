@@ -6,7 +6,14 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-ResponseMetric = Literal["viability", "ic50", "auc", "responder_binary"]
+ResponseMetric = Literal[
+    "viability",
+    "ic50",
+    "auc",
+    "aac",
+    "dss",
+    "responder_binary",
+]
 NormalizationMethod = Literal[
     "raw",
     "median_of_ratios",
