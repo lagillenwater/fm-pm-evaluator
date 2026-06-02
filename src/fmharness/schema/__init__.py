@@ -17,6 +17,7 @@ from fmharness.schema.assays import (
     ResponseMetric,
 )
 from fmharness.schema.entities import Patient, Sample, SubtypeGranularity
+from fmharness.schema.models import ModelMetadata, TaskSignal
 from fmharness.schema.predictions import Prediction
 from fmharness.schema.provenance import EnvironmentSnapshot, LeakageProfile
 from fmharness.schema.tranches import Tranche
@@ -26,11 +27,13 @@ __all__ = [
     "DrugAssay",
     "EnvironmentSnapshot",
     "LeakageProfile",
+    "ModelMetadata",
     "NormalizationMethod",
     "Patient",
     "Prediction",
     "ResponseMetric",
     "Sample",
     "SubtypeGranularity",
+    "TaskSignal",
     "Tranche",
 ]
