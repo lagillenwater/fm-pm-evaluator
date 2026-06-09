@@ -222,12 +222,26 @@ __marimo__/
 data/*
 # except curated static assets (drug xref, gene-panel maps, etc.) — tracked
 !data/static/
-# generated reports
+# generated reports and analysis outputs (regenerable from scripts/)
 reports/
+results/
 # built Apptainer images
 containers/*.sif
 # local user secrets/state
 .fmharness/
+# archived prior-iteration code/results (kept locally, out of version control)
+archive/
 
 docs/fm-pdo-evaluator-plan.md
 docs/datasets.md
+
+# OS cruft
+.DS_Store
+
+# Stack generation + embedding outputs and local archives (regenerable; never tracked)
+/generated/
+/generated_rich/
+/generated*.zip
+/stack_gdsc.csv
+/stack_soragni.csv
+/l1000_context*.h5ad

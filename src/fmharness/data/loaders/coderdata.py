@@ -32,7 +32,9 @@ parameters (``fit_ec50``, ``fit_r2``, ``fit_ec50se``, ``fit_einf``,
 
 from __future__ import annotations
 
+import gzip
 import hashlib
+import zlib
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -88,6 +90,17 @@ class CoderDataBundle:
     baseline_expression: list[BaselineExpression]
 
 
+def _gz_corrupt(path: Path) -> bool:
+    """True if a .gz file is truncated/corrupt (read it through to verify)."""
+    try:
+        with gzip.open(path, "rb") as fh:
+            while fh.read(1 << 20):
+                pass
+        return False
+    except (EOFError, OSError, zlib.error):
+        return True
+
+
 def load_coderdata_tranche(
     name: str,
     repo_root: Path,
@@ -107,8 +120,28 @@ def load_coderdata_tranche(
     """
     ds_path = repo_root / local_path
     ds_path.mkdir(parents=True, exist_ok=True)
-    cd.download(name=name, local_path=ds_path, exist_ok=True)
-    ds = cd.load(name, local_path=ds_path)
+    # CoderData's download still contacts the network even with exist_ok=True, so
+    # it fails on a flaky connection when the tranche is already cached. Skip it
+    # when the core files are present; only download a tranche we do not have.
+    cached = any(ds_path.glob(f"{name}_samples.*")) and any(
+        ds_path.glob(f"{name}_transcriptomics.*")
+    )
+    if not cached:
+        cd.download(name=name, local_path=ds_path, exist_ok=True)
+    # Load optimistically. A download interrupted mid-stream leaves a truncated
+    # gz in the cache; on that failure, delete only the corrupt file(s) and
+    # re-fetch them, rather than crashing or re-downloading the whole tranche.
+    try:
+        ds = cd.load(name, local_path=ds_path)
+    except (EOFError, OSError, zlib.error):
+        candidates = [*ds_path.glob(f"{name}_*.gz"), ds_path / "genes.csv.gz"]
+        removed = [p for p in candidates if p.exists() and _gz_corrupt(p)]
+        if not removed:
+            raise
+        for p in removed:
+            p.unlink()
+        cd.download(name=name, local_path=ds_path, exist_ok=True)
+        ds = cd.load(name, local_path=ds_path)
 
     samples_df: pd.DataFrame = ds.samples
     transcriptomics_df: pd.DataFrame = ds.transcriptomics
