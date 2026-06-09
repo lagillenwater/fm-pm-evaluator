@@ -19,21 +19,25 @@ def test_logcpm_is_scale_invariant() -> None:
 
 
 def test_drug_pert_maps_cid_and_inchikey() -> None:
-    drugs = pd.DataFrame({
-        "improve_drug_id": ["D1", "D2", "D3"],
-        "pubchem_id": [123, 999999, None],
-        "InChIKey": ["AAAAAAAAAAAAAA-x", "BBB-y", "CCCCCCCCCCCCCC-z"],
-    })
-    pert = pd.DataFrame({
-        "pert_type": ["trt_cp", "trt_cp", "ctl_vehicle"],
-        "pubchem_cid": [123, 0, 5],
-        "inchi_key_prefix": ["ZZZ", "CCCCCCCCCCCCCC", "QQ"],
-        "pert_id": ["BRD-A", "BRD-C", "BRD-V"],
-    })
+    drugs = pd.DataFrame(
+        {
+            "improve_drug_id": ["D1", "D2", "D3"],
+            "pubchem_id": [123, 999999, None],
+            "InChIKey": ["AAAAAAAAAAAAAA-x", "BBB-y", "CCCCCCCCCCCCCC-z"],
+        }
+    )
+    pert = pd.DataFrame(
+        {
+            "pert_type": ["trt_cp", "trt_cp", "ctl_vehicle"],
+            "pubchem_cid": [123, 0, 5],
+            "inchi_key_prefix": ["ZZZ", "CCCCCCCCCCCCCC", "QQ"],
+            "pert_id": ["BRD-A", "BRD-C", "BRD-V"],
+        }
+    )
     drug2pert, pert2drug = drug_pert_maps(drugs, pert)
-    assert drug2pert["D1"] == "BRD-A"          # matched by PubChem CID 123
-    assert drug2pert["D3"] == "BRD-C"          # matched by 14-char InChIKey prefix
-    assert "D2" not in drug2pert               # no CID / InChIKey match
+    assert drug2pert["D1"] == "BRD-A"  # matched by PubChem CID 123
+    assert drug2pert["D3"] == "BRD-C"  # matched by 14-char InChIKey prefix
+    assert "D2" not in drug2pert  # no CID / InChIKey match
     assert pert2drug["BRD-A"] == "D1"
 
 
@@ -51,10 +55,10 @@ def test_build_generated_deltas(tmp_path: Path) -> None:
     gdir = tmp_path / "gen"
     gdir.mkdir()
     _write_adata(gdir / "BRD-1.h5ad", [[12, 18, 33], [44, 48, 66]], orgs, genes)  # -> drug D1
-    _write_adata(gdir / "BRD-X.h5ad", [[1, 1, 1], [1, 1, 1]], orgs, genes)        # unmapped
+    _write_adata(gdir / "BRD-X.h5ad", [[1, 1, 1], [1, 1, 1]], orgs, genes)  # unmapped
 
     delta, key = build_generated_deltas(gdir, base, {"BRD-1": "D1"}, use_logcpm=False)
     assert set(delta.columns) == {"A", "B", "C"}
-    assert delta.shape == (2, 3)                       # only BRD-1's 2 organoids
-    assert list(key["drug"].unique()) == ["D1"]        # BRD-X skipped
+    assert delta.shape == (2, 3)  # only BRD-1's 2 organoids
+    assert list(key["drug"].unique()) == ["D1"]  # BRD-X skipped
     assert float(delta.loc[delta.index[0], "A"]) == 2.0  # 12 - 10 for o1

@@ -36,8 +36,11 @@ def test_hallmark_requires_signatures() -> None:
 def test_hallmark_scores_induced_death_most_sensitive() -> None:
     cols = ["A", "B", "C", "N1", "N2"]
     rng = np.random.default_rng(0)
-    delta = pd.DataFrame(rng.normal(0, 0.1, (6, 5)), columns=pd.Index(cols),
-                         index=pd.Index([f"s{i}" for i in range(6)]))
+    delta = pd.DataFrame(
+        rng.normal(0, 0.1, (6, 5)),
+        columns=pd.Index(cols),
+        index=pd.Index([f"s{i}" for i in range(6)]),
+    )
     delta.loc["s0", ["A", "B", "C"]] += 5.0  # strong death induction in s0
     scores = SignatureAdapter(SIGS).predict(delta)
     assert int(np.argmax(scores)) == 0
@@ -57,6 +60,7 @@ def test_szalai_transfers_direction_to_heldout_cohort() -> None:
 
 def test_xgboost_runs_or_skips_without_libomp() -> None:
     from fmharness.adapters import XGBoostAdapter
+
     rng = np.random.default_rng(2)
     cols = pd.Index([f"g{i}" for i in range(8)])
     x_tr = pd.DataFrame(rng.normal(size=(60, 8)), columns=cols)
