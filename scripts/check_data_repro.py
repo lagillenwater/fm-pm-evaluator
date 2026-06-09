@@ -80,8 +80,11 @@ def main() -> None:
     panel = build_panel(genes_csv, {int(c) for c in x_df.columns}, stack)
     vsha = _sha16("\n".join(sorted(stack)).encode())
     pp = panel.sort_values("stack_symbol").reset_index(drop=True)
-    psha = _sha16(("|".join(pp["stack_symbol"].astype(str)) + "##"
-                   + "|".join(pp["entrez_id"].astype(str))).encode())
+    psha = _sha16(
+        (
+            "|".join(pp["stack_symbol"].astype(str)) + "##" + "|".join(pp["entrez_id"].astype(str))
+        ).encode()
+    )
     print("\n-- stack gene filter --")
     print(f"  vocabulary  {len(stack)} symbols   sha={vsha}")
     print(f"  panel       {len(panel)} genes (regenerated)   sha={psha}")

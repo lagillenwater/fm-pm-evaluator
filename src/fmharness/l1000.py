@@ -46,8 +46,11 @@ def logcpm(df: pd.DataFrame) -> pd.DataFrame:
     per-sample sequencing depth (which would inflate the random-gene-set baseline)."""
     lib = df.sum(axis=1).to_numpy(dtype=np.float64)
     lib[lib == 0] = 1.0
-    return pd.DataFrame(np.log1p(df.to_numpy(dtype=np.float64) / lib[:, None] * 1e4),
-                        index=df.index, columns=df.columns)
+    return pd.DataFrame(
+        np.log1p(df.to_numpy(dtype=np.float64) / lib[:, None] * 1e4),
+        index=df.index,
+        columns=df.columns,
+    )
 
 
 def _ncid(x: object) -> str:
@@ -62,7 +65,8 @@ def _norm(s: object) -> str:
 
 
 def drug_pert_maps(
-    drugs: pd.DataFrame, pert_info: pd.DataFrame,
+    drugs: pd.DataFrame,
+    pert_info: pd.DataFrame,
 ) -> tuple[dict[str, str], dict[str, str]]:
     """``(drug2pert, pert2drug)`` mapping CoderData ``improve_drug_id`` to L1000
     ``trt_cp`` pert_ids by PubChem CID or InChIKey prefix. ``drugs`` needs columns
@@ -110,17 +114,22 @@ def _drug_of(path: Path, gen: ad.AnnData, valid: set[str]) -> str:
 
 
 def build_generated_deltas(
-    generated_dir: Path, baseline_path: Path, pert_to_drug: dict[str, str],
-    *, use_logcpm: bool = True,
+    generated_dir: Path,
+    baseline_path: Path,
+    pert_to_drug: dict[str, str],
+    *,
+    use_logcpm: bool = True,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """delta = generated_treated - baseline per (organoid, drug), gene-aligned.
 
     Returns ``(delta[pairs x genes], key[patient, drug])``. Files that do not map to
     a drug in ``pert_to_drug`` are skipped (with a note)."""
     base = ad.read_h5ad(baseline_path)
-    base_df = pd.DataFrame(dense(base.X),
-                           index=pd.Index([str(o) for o in base.obs_names]),
-                           columns=pd.Index([str(g) for g in base.var_names]))
+    base_df = pd.DataFrame(
+        dense(base.X),
+        index=pd.Index([str(o) for o in base.obs_names]),
+        columns=pd.Index([str(g) for g in base.var_names]),
+    )
     if use_logcpm:
         base_df = logcpm(base_df)
     valid = set(pert_to_drug)
@@ -133,9 +142,11 @@ def build_generated_deltas(
         if not pid:
             print(f"  skip {f.name}: no pert_id match")
             continue
-        g = pd.DataFrame(dense(gen.X),
-                         index=pd.Index([str(o) for o in gen.obs_names]),
-                         columns=pd.Index([str(x) for x in gen.var_names]))
+        g = pd.DataFrame(
+            dense(gen.X),
+            index=pd.Index([str(o) for o in gen.obs_names]),
+            columns=pd.Index([str(x) for x in gen.var_names]),
+        )
         if use_logcpm:
             g = logcpm(g)
         if genes is None:
@@ -153,8 +164,14 @@ def build_generated_deltas(
 
 
 def build_l1000_gdsc_pairs(
-    repo: Path, l1000_dir: Path, gctx: str, *, time: float = 24.0, chunk: int = 2000,
-    treated_cap: int = 8, dmso_cap: int = 60,
+    repo: Path,
+    l1000_dir: Path,
+    gctx: str,
+    *,
+    time: float = 24.0,
+    chunk: int = 2000,
+    treated_cap: int = 8,
+    dmso_cap: int = 60,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Real L1000 treated-minus-DMSO deltas paired with GDSC2 AUC on shared
     (cell line, drug) pairs.
@@ -164,10 +181,12 @@ def build_l1000_gdsc_pairs(
     bounded; ``cmapPy`` is imported here (Alpine only)."""
     from cmapPy.pandasGEXpress.parse_gctx import parse  # type: ignore  # Alpine-only dep
 
-    pert = pd.read_csv(l1000_dir / "GSE92742_Broad_LINCS_pert_info.txt.gz",
-                       sep="\t", low_memory=False)
-    inst = pd.read_csv(l1000_dir / "GSE92742_Broad_LINCS_inst_info.txt.gz",
-                       sep="\t", low_memory=False)
+    pert = pd.read_csv(
+        l1000_dir / "GSE92742_Broad_LINCS_pert_info.txt.gz", sep="\t", low_memory=False
+    )
+    inst = pd.read_csv(
+        l1000_dir / "GSE92742_Broad_LINCS_inst_info.txt.gz", sep="\t", low_memory=False
+    )
     gene = pd.read_csv(l1000_dir / "GSE92742_Broad_LINCS_gene_info.txt.gz", sep="\t")
     xg, dg = build_sample_design(load_coderdata_tranche("gdscv2", repo), "all", "auc")
     gdr = pd.read_csv(repo / "data/raw/coderdata/gdscv2_drugs.tsv.gz", sep="\t")
@@ -181,28 +200,43 @@ def build_l1000_gdsc_pairs(
     print(f"shared: {len(pert2drug)} drugs, {len(shared)} cell lines")
 
     drug_ids = list(pert2drug)
-    t = inst[inst["pert_id"].isin(drug_ids) & inst["cell_id"].isin(l_ids)
-             & (inst["pert_time"] == time)].copy()
-    c = inst[(inst["pert_iname"] == "DMSO") & inst["cell_id"].isin(l_ids)
-             & (inst["pert_time"] == time)].copy()
-    print(f"wells: {len(t)} treated + {len(c)} DMSO; "
-          f"capping to <= {treated_cap}/(cell,drug), <= {dmso_cap}/cell")
-    t = t.sort_values(by="inst_id").groupby(  # type: ignore[call-overload]
-        ["cell_id", "pert_id"], sort=False).head(treated_cap)
-    c = c.sort_values(by="inst_id").groupby(  # type: ignore[call-overload]
-        "cell_id", sort=False).head(dmso_cap)
+    t = inst[
+        inst["pert_id"].isin(drug_ids) & inst["cell_id"].isin(l_ids) & (inst["pert_time"] == time)
+    ].copy()
+    c = inst[
+        (inst["pert_iname"] == "DMSO") & inst["cell_id"].isin(l_ids) & (inst["pert_time"] == time)
+    ].copy()
+    print(
+        f"wells: {len(t)} treated + {len(c)} DMSO; "
+        f"capping to <= {treated_cap}/(cell,drug), <= {dmso_cap}/cell"
+    )
+    t = (
+        t.sort_values(by="inst_id")  # type: ignore[call-overload]
+        .groupby(  # type: ignore[call-overload]
+            ["cell_id", "pert_id"], sort=False
+        )
+        .head(treated_cap)
+    )
+    c = (
+        c.sort_values(by="inst_id")  # type: ignore[call-overload]
+        .groupby(  # type: ignore[call-overload]
+            "cell_id", sort=False
+        )
+        .head(dmso_cap)
+    )
     print(f"  after cap: {len(t)} treated + {len(c)} DMSO; reading in chunks of {chunk} ...")
 
     sym = gene.set_index("pr_gene_id")["pr_gene_symbol"].astype(str)
-    t_lab = dict(zip(t["inst_id"], t["cell_id"].astype(str) + "\t" + t["pert_id"].astype(str),
-                     strict=True))
+    t_lab = dict(
+        zip(t["inst_id"], t["cell_id"].astype(str) + "\t" + t["pert_id"].astype(str), strict=True)
+    )
     c_lab = dict(zip(c["inst_id"], c["cell_id"].astype(str), strict=True))
 
     def group_means(ids: list[str], lab: dict[str, str]) -> pd.DataFrame:
         tot: pd.DataFrame | None = None
         cnt: pd.Series | None = None
         for i in range(0, len(ids), chunk):
-            block = parse(gctx, cid=ids[i:i + chunk]).data_df.T  # wells x genes
+            block = parse(gctx, cid=ids[i : i + chunk]).data_df.T  # wells x genes
             block.index = block.index.map(lab)
             s, n = block.groupby(level=0).sum(), block.groupby(level=0).size()
             tot = s if tot is None else tot.add(s, fill_value=0.0)
@@ -218,9 +252,14 @@ def build_l1000_gdsc_pairs(
     tmean, cells, perts = tmean[keep], cells[keep], perts[keep]
     delta = pd.DataFrame(
         tmean.to_numpy() - dmean.reindex(index=cells, columns=tmean.columns).to_numpy(),
-        columns=pd.Index([str(sym.get(int(i), "")) for i in tmean.columns]))
+        columns=pd.Index([str(sym.get(int(i), "")) for i in tmean.columns]),
+    )
     delta = delta.loc[:, [str(col) != "" for col in delta.columns]]
     delta = delta.loc[:, ~pd.Index(delta.columns).duplicated()]
-    key = pd.DataFrame({"patient": pd.Series(cells).map(l_to_g).to_numpy(),
-                        "drug": pd.Series(perts).map(pert2drug).to_numpy()})
+    key = pd.DataFrame(
+        {
+            "patient": pd.Series(cells).map(l_to_g).to_numpy(),
+            "drug": pd.Series(perts).map(pert2drug).to_numpy(),
+        }
+    )
     return delta, key, cast("pd.DataFrame", dg)

@@ -71,13 +71,19 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--l1000-dir", default=".", help="dir with GSE92742 *_info.txt.gz files")
     ap.add_argument("--gctx", required=True, help="path to the Level-3 .gctx")
-    ap.add_argument("--cell-lines", nargs="*", default=CORE_LINES,
-                    help="L1000 cell lines to use as context, or 'all' for every line")
+    ap.add_argument(
+        "--cell-lines",
+        nargs="*",
+        default=CORE_LINES,
+        help="L1000 cell lines to use as context, or 'all' for every line",
+    )
     ap.add_argument("--out", default="l1000_context.h5ad")
-    ap.add_argument("--chunk", type=int, default=2000,
-                    help="gctx columns read per chunk (caps peak memory)")
-    ap.add_argument("--treated-cap", type=int, default=50,
-                    help="max treated wells kept per drug (context size)")
+    ap.add_argument(
+        "--chunk", type=int, default=2000, help="gctx columns read per chunk (caps peak memory)"
+    )
+    ap.add_argument(
+        "--treated-cap", type=int, default=50, help="max treated wells kept per drug (context size)"
+    )
     ap.add_argument("--dmso-cap", type=int, default=25, help="max DMSO wells kept per cell line")
     args = ap.parse_args()
 
@@ -90,14 +96,19 @@ def main() -> None:
     pids = soragni_pert_ids(repo, pert)
     print(f"matched {len(pids)} Soragni drugs to L1000 pert_ids")
 
-    in_lines = (pd.Series(True, index=inst.index) if args.cell_lines == ["all"]
-                else inst["cell_id"].isin(args.cell_lines))
+    in_lines = (
+        pd.Series(True, index=inst.index)
+        if args.cell_lines == ["all"]
+        else inst["cell_id"].isin(args.cell_lines)
+    )
     treated = inst[in_lines & inst["pert_id"].isin(set(pids.values()))].copy()
     control = inst[in_lines & (inst["pert_iname"] == "DMSO")].copy()
     # Cap wells per condition (keeps the context modest and avoids OOM on the read);
     # Stack only needs a representative set of cells per drug, not every well.
-    print(f"wells: {len(treated)} treated + {len(control)} DMSO; "
-          f"capping to <= {args.treated_cap}/drug, <= {args.dmso_cap}/cell")
+    print(
+        f"wells: {len(treated)} treated + {len(control)} DMSO; "
+        f"capping to <= {args.treated_cap}/drug, <= {args.dmso_cap}/cell"
+    )
     treated = treated.sort_values("inst_id").groupby("pert_id", sort=False).head(args.treated_cap)
     control = control.sort_values("inst_id").groupby("cell_id", sort=False).head(args.dmso_cap)
     sel = pd.concat([treated, control])
@@ -105,8 +116,10 @@ def main() -> None:
 
     # read selected columns from the Level-3 matrix in chunks (bounds peak memory)
     ids = sel["inst_id"].tolist()
-    blocks = [parse(args.gctx, cid=ids[i:i + args.chunk]).data_df
-              for i in range(0, len(ids), args.chunk)]
+    blocks = [
+        parse(args.gctx, cid=ids[i : i + args.chunk]).data_df
+        for i in range(0, len(ids), args.chunk)
+    ]
     gx = pd.concat(blocks, axis=1) if len(blocks) > 1 else blocks[0]  # genes (pr_gene_id) x wells
     sym = gene.set_index("pr_gene_id")["pr_gene_symbol"].astype(str)
     gx.index = [sym.get(int(i), "") for i in gx.index]
@@ -127,8 +140,10 @@ def main() -> None:
     adata.var["feature_name"] = list(gx.index)
 
     adata.write_h5ad(repo / args.out if not Path(args.out).is_absolute() else Path(args.out))
-    print(f"wrote {args.out}  ({adata.n_obs} wells x {adata.n_vars} genes, "
-          f"{int(adata.obs['is_control'].sum())} DMSO)")
+    print(
+        f"wrote {args.out}  ({adata.n_obs} wells x {adata.n_vars} genes, "
+        f"{int(adata.obs['is_control'].sum())} DMSO)"
+    )
 
 
 if __name__ == "__main__":

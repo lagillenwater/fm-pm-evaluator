@@ -54,12 +54,19 @@ def main() -> None:
     ap.add_argument("--dataset", default="sarcoma")
     ap.add_argument("--rna-source", default="organoid", choices=["all", "organoid", "tumor"])
     ap.add_argument("--n-components", type=int, default=10, help="PCs for the linear/stack probe")
-    ap.add_argument("--std-floor", type=float, default=0.5,
-                    help="min per-gene SD in PCA standardization; prevents out-of-sample blow-ups")
+    ap.add_argument(
+        "--std-floor",
+        type=float,
+        default=0.5,
+        help="min per-gene SD in PCA standardization; prevents out-of-sample blow-ups",
+    )
     ap.add_argument("--n-splits", type=int, default=5, help="leave-organoid-out CV folds")
     ap.add_argument("--n-permutations", type=int, default=100)
-    ap.add_argument("--stack-embeddings", default=None,
-                    help="CSV of Stack embeddings indexed by organoid id (one row per organoid)")
+    ap.add_argument(
+        "--stack-embeddings",
+        default=None,
+        help="CSV of Stack embeddings indexed by organoid id (one row per organoid)",
+    )
     args = ap.parse_args()
 
     repo = Path(__file__).resolve().parent.parent
@@ -90,7 +97,8 @@ def main() -> None:
         emb = emb.loc[common]
         print(f"  stack embeddings: {emb.shape[0]} organoids x {emb.shape[1]} dims")
         predictors["stack"] = (
-            lambda: SimpleProbe(n_components=args.n_components, std_floor=floor), emb
+            lambda: SimpleProbe(n_components=args.n_components, std_floor=floor),
+            emb,
         )
 
     print(f"\n=== leave-one-organoid-out CV ({args.n_splits} folds) ===")
@@ -108,11 +116,17 @@ def main() -> None:
             p = grouped_cv_predict(factory, feat, d_perm, n_splits=args.n_splits, seed=SEED)
             null[b] = interaction_rho(p, "y_resid")
         pval = float(np.mean(null >= inter))
-        rows.append({
-            "predictor": name, "global_rho": g, "within_drug_rho": wd,
-            "interaction_rho": inter, "interaction_null_mean": float(null.mean()),
-            "interaction_null_p95": float(np.quantile(null, 0.95)), "interaction_p": pval,
-        })
+        rows.append(
+            {
+                "predictor": name,
+                "global_rho": g,
+                "within_drug_rho": wd,
+                "interaction_rho": inter,
+                "interaction_null_mean": float(null.mean()),
+                "interaction_null_p95": float(np.quantile(null, 0.95)),
+                "interaction_p": pval,
+            }
+        )
         print(
             f"  {name:10s} global={g:+.3f}  within_drug={wd:+.3f}  interaction={inter:+.3f}  "
             f"(null mean {null.mean():+.3f}, 95th {np.quantile(null, 0.95):+.3f}, p={pval:.3f})"

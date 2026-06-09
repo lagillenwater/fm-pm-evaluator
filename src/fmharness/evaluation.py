@@ -107,9 +107,7 @@ def grouped_cv_predict(
     return pd.DataFrame.from_records(rows)
 
 
-def _within_drug_corr(
-    preds: pd.DataFrame, true_col: str, pred_col: str, min_n: int = 3
-) -> float:
+def _within_drug_corr(preds: pd.DataFrame, true_col: str, pred_col: str, min_n: int = 3) -> float:
     """Pooled within-drug rank correlation of ``true_col`` vs ``pred_col``.
 
     Ranks both columns inside each drug, centers the ranks, pools across drugs,

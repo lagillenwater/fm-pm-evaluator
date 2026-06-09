@@ -59,34 +59,54 @@ def score(preds: pd.DataFrame, n_perm: int) -> tuple[float, float, float]:
     """global rho, interaction rho, within-drug label-permutation p (vs interaction)."""
     gl = global_spearman(preds)
     it = interaction_rho(preds, "y_pred")
-    null = np.array([
-        interaction_rho(
-            preds.assign(y_true=permute_within_drug(
-                preds["drug"], preds["y_true"], np.random.default_rng(SEED + 1 + b))),
-            "y_pred")
-        for b in range(n_perm)
-    ])
+    null = np.array(
+        [
+            interaction_rho(
+                preds.assign(
+                    y_true=permute_within_drug(
+                        preds["drug"], preds["y_true"], np.random.default_rng(SEED + 1 + b)
+                    )
+                ),
+                "y_pred",
+            )
+            for b in range(n_perm)
+        ]
+    )
     return gl, it, float(np.mean(null >= it))
 
 
 def transfer_predict(factory, fg, dg, fs, ds) -> pd.DataFrame:
     """Fit a probe on GDSC2, predict the frozen Soragni cohort."""
     probe = factory()
-    probe.fit(fg.loc[dg["patient"]].to_numpy(), list(dg["drug"]),
-              dg["y"].to_numpy(), groups=list(dg["patient"]))
+    probe.fit(
+        fg.loc[dg["patient"]].to_numpy(),
+        list(dg["drug"]),
+        dg["y"].to_numpy(),
+        groups=list(dg["patient"]),
+    )
     base, resid = probe.predict_parts(fs.loc[ds["patient"]].to_numpy(), list(ds["drug"]))
-    return pd.DataFrame({
-        "patient": list(ds["patient"]), "drug": list(ds["drug"]),
-        "y_true": ds["y"].to_numpy(dtype=np.float64), "y_pred": base + resid,
-    })
+    return pd.DataFrame(
+        {
+            "patient": list(ds["patient"]),
+            "drug": list(ds["drug"]),
+            "y_true": ds["y"].to_numpy(dtype=np.float64),
+            "y_pred": base + resid,
+        }
+    )
 
 
 def drug_mean(ds: pd.DataFrame) -> pd.DataFrame:
     """Per-drug mean AUC -- organoid-independent, so interaction is ~0 by construction.
     The drug-level floor: global rho is how much drug identity alone explains."""
     pred = ds.groupby("drug")["y"].transform("mean")
-    return pd.DataFrame({"patient": ds["patient"], "drug": ds["drug"],
-                         "y_true": ds["y"].to_numpy(dtype=np.float64), "y_pred": pred.to_numpy()})
+    return pd.DataFrame(
+        {
+            "patient": ds["patient"],
+            "drug": ds["drug"],
+            "y_true": ds["y"].to_numpy(dtype=np.float64),
+            "y_pred": pred.to_numpy(),
+        }
+    )
 
 
 def pertid_to_drug(repo: Path, drugs: set[str]) -> dict[str, str]:
@@ -109,7 +129,10 @@ def pertid_to_drug(repo: Path, drugs: set[str]) -> dict[str, str]:
 
 
 def direct_l1000(
-    ctx_path: Path, ds: pd.DataFrame, sigs, repo: Path,
+    ctx_path: Path,
+    ds: pd.DataFrame,
+    sigs,
+    repo: Path,
 ) -> list[tuple[str, pd.DataFrame]]:
     """Real L1000 average drug delta read through each signature, broadcast to organoids."""
     ctx = ad.read_h5ad(ctx_path)
@@ -129,10 +152,21 @@ def direct_l1000(
     out: list[tuple[str, pd.DataFrame]] = []
     for sig in sens.columns:
         m = ds.assign(y_pred=-ds["drug"].astype(str).map(sens[sig]).to_numpy()).dropna(
-            subset=["y_pred"])
-        out.append((f"l1000:{sig}", pd.DataFrame({
-            "patient": m["patient"], "drug": m["drug"],
-            "y_true": m["y"].to_numpy(dtype=np.float64), "y_pred": m["y_pred"].to_numpy()})))
+            subset=["y_pred"]
+        )
+        out.append(
+            (
+                f"l1000:{sig}",
+                pd.DataFrame(
+                    {
+                        "patient": m["patient"],
+                        "drug": m["drug"],
+                        "y_true": m["y"].to_numpy(dtype=np.float64),
+                        "y_pred": m["y_pred"].to_numpy(),
+                    }
+                ),
+            )
+        )
     return out
 
 
@@ -146,17 +180,24 @@ def main() -> None:
     args = ap.parse_args()
 
     repo = Path(__file__).resolve().parent.parent
-    sigs = (load_hallmark(repo / "data/static/hallmark_signatures.gmt")
-            if args.signatures == "hallmark" else None)
+    sigs = (
+        load_hallmark(repo / "data/static/hallmark_signatures.gmt")
+        if args.signatures == "hallmark"
+        else None
+    )
     xs, ds = build_sample_design(load_coderdata_tranche("sarcoma", repo), "organoid", "auc")
     xg, dg = build_sample_design(load_coderdata_tranche("gdscv2", repo), "all", "auc")
     gdsc_drugs = set(dg["drug"].astype(str))
 
     # direct-L1000 defines Path B's drug set (the L1000-matched drugs) when a context is given
-    l1000_rows = (direct_l1000(Path(args.l1000_context), ds, sigs, repo)
-                  if args.l1000_context else [])
-    ref = (set(l1000_rows[0][1]["drug"].astype(str)) if l1000_rows
-           else set(ds["drug"].astype(str)) & gdsc_drugs)
+    l1000_rows = (
+        direct_l1000(Path(args.l1000_context), ds, sigs, repo) if args.l1000_context else []
+    )
+    ref = (
+        set(l1000_rows[0][1]["drug"].astype(str))
+        if l1000_rows
+        else set(ds["drug"].astype(str)) & gdsc_drugs
+    )
 
     rows: list[tuple[str, pd.DataFrame]] = [
         ("drug-mean", drug_mean(ds[ds["drug"].astype(str).isin(ref)].copy())),
@@ -170,8 +211,13 @@ def main() -> None:
     fg, fs = np.log1p(xg[genes]), np.log1p(xs[genes])
     print(f"ref drugs {len(ref)} | transfer (ref & GDSC2) drugs {len(shared)}")
     for rep, reducer in (("pca", "pca"), ("nmf", "nmf")):
-        factory = partial(SimpleProbe, n_components=args.n_components, std_floor=args.std_floor,
-                          reducer=reducer, per_drug=True)
+        factory = partial(
+            SimpleProbe,
+            n_components=args.n_components,
+            std_floor=args.std_floor,
+            reducer=reducer,
+            per_drug=True,
+        )
         rows.append((rep, transfer_predict(factory, fg, dg_t, fs, ds_t)))
 
     print(f"\n=== Soragni baselines ({args.signatures} signature) ===")

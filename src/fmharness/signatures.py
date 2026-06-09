@@ -24,13 +24,64 @@ from fmharness.evaluation import global_spearman, interaction_rho
 #                                     -1 = down under a working drug => more sensitive
 SIGNATURES: dict[str, tuple[tuple[str, ...], int]] = {
     "apoptosis_p53": (
-        ("CDKN1A", "MDM2", "BAX", "BBC3", "PMAIP1", "GADD45A", "SESN1", "SESN2", "BTG2",
-         "FAS", "TNFRSF10B", "CASP3", "CASP7", "CASP8", "BID", "BCL2L11", "FDXR", "RRM2B",
-         "TP53I3", "DDB2", "XPC", "PHLDA3", "ZMAT3", "CCNG1", "AEN", "TP53INP1"), 1),
+        (
+            "CDKN1A",
+            "MDM2",
+            "BAX",
+            "BBC3",
+            "PMAIP1",
+            "GADD45A",
+            "SESN1",
+            "SESN2",
+            "BTG2",
+            "FAS",
+            "TNFRSF10B",
+            "CASP3",
+            "CASP7",
+            "CASP8",
+            "BID",
+            "BCL2L11",
+            "FDXR",
+            "RRM2B",
+            "TP53I3",
+            "DDB2",
+            "XPC",
+            "PHLDA3",
+            "ZMAT3",
+            "CCNG1",
+            "AEN",
+            "TP53INP1",
+        ),
+        1,
+    ),
     "proliferation": (
-        ("MKI67", "CCNB1", "CCNB2", "CCNA2", "CDK1", "CDC20", "TOP2A", "PCNA", "MCM2",
-         "MCM3", "MCM4", "MCM5", "MCM6", "MCM7", "BUB1", "AURKB", "PLK1", "FOXM1",
-         "CENPA", "KIF11", "TYMS", "RRM2", "BIRC5"), -1),
+        (
+            "MKI67",
+            "CCNB1",
+            "CCNB2",
+            "CCNA2",
+            "CDK1",
+            "CDC20",
+            "TOP2A",
+            "PCNA",
+            "MCM2",
+            "MCM3",
+            "MCM4",
+            "MCM5",
+            "MCM6",
+            "MCM7",
+            "BUB1",
+            "AURKB",
+            "PLK1",
+            "FOXM1",
+            "CENPA",
+            "KIF11",
+            "TYMS",
+            "RRM2",
+            "BIRC5",
+        ),
+        -1,
+    ),
 }
 
 # MSigDB Hallmark sets (written by fetch_hallmark.py) as a published alternative to
@@ -113,8 +164,11 @@ def score_signatures(
       generic perturbation-magnitude artifact, not death biology.
     """
     z = _zscore(delta)
-    base = key.reset_index(drop=True).reset_index().merge(
-        design.rename(columns={"y": "y_true"}), on=["patient", "drug"], how="inner")
+    base = (
+        key.reset_index(drop=True)
+        .reset_index()
+        .merge(design.rename(columns={"y": "y_true"}), on=["patient", "drug"], how="inner")
+    )
     ridx = base["index"].to_numpy()
     drug_s = cast("pd.Series", base["drug"])
     y_s = cast("pd.Series", base["y_true"])
@@ -122,12 +176,14 @@ def score_signatures(
     rng = np.random.default_rng(seed)
 
     def interaction_of(scorevec: np.ndarray) -> tuple[float, pd.DataFrame]:
-        p = pd.DataFrame({
-            "patient": base["patient"].to_numpy(),
-            "drug": base["drug"].to_numpy(),
-            "y_true": base["y_true"].to_numpy(),
-            "y_pred": -scorevec[ridx],
-        })
+        p = pd.DataFrame(
+            {
+                "patient": base["patient"].to_numpy(),
+                "drug": base["drug"].to_numpy(),
+                "y_true": base["y_true"].to_numpy(),
+                "y_pred": -scorevec[ridx],
+            }
+        )
         return interaction_rho(p, "y_pred"), p
 
     sigs = SIGNATURES if signatures is None else signatures
@@ -138,25 +194,37 @@ def score_signatures(
             continue
         it, preds = interaction_of(direction * z[present].to_numpy().mean(axis=1))
         gl = global_spearman(preds)
-        lab = np.array([
-            interaction_rho(
-                preds.assign(y_true=permute_within_drug(
-                    drug_s, y_s, np.random.default_rng(seed + 1 + b))),
-                "y_pred")
-            for b in range(n_perm)
-        ])
-        rnd = np.array([
-            interaction_of(
-                direction
-                * z[list(rng.choice(cols, len(present), replace=False))].to_numpy().mean(axis=1),
-            )[0]
-            for _ in range(n_random)
-        ])
-        out.append({
-            "signature": name, "n_genes": len(present), "interaction": round(it, 3),
-            "global": round(gl, 3),
-            "p_label": round(float(np.mean(lab >= it)), 3),
-            "rnd_p95": round(float(np.quantile(rnd, 0.95)), 3),
-            "p_vs_random": round(float(np.mean(rnd >= it)), 3),
-        })
+        lab = np.array(
+            [
+                interaction_rho(
+                    preds.assign(
+                        y_true=permute_within_drug(drug_s, y_s, np.random.default_rng(seed + 1 + b))
+                    ),
+                    "y_pred",
+                )
+                for b in range(n_perm)
+            ]
+        )
+        rnd = np.array(
+            [
+                interaction_of(
+                    direction
+                    * z[list(rng.choice(cols, len(present), replace=False))]
+                    .to_numpy()
+                    .mean(axis=1),
+                )[0]
+                for _ in range(n_random)
+            ]
+        )
+        out.append(
+            {
+                "signature": name,
+                "n_genes": len(present),
+                "interaction": round(it, 3),
+                "global": round(gl, 3),
+                "p_label": round(float(np.mean(lab >= it)), 3),
+                "rnd_p95": round(float(np.quantile(rnd, 0.95)), 3),
+                "p_vs_random": round(float(np.mean(rnd >= it)), 3),
+            }
+        )
     return pd.DataFrame(out)

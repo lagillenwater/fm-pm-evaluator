@@ -16,8 +16,7 @@ import urllib.request
 from pathlib import Path
 
 ENRICHR = (
-    "https://maayanlab.cloud/Enrichr/geneSetLibrary"
-    "?mode=text&libraryName=MSigDB_Hallmark_2020"
+    "https://maayanlab.cloud/Enrichr/geneSetLibrary?mode=text&libraryName=MSigDB_Hallmark_2020"
 )
 # Enrichr display name -> canonical MSigDB Hallmark name
 WANT = {
@@ -42,10 +41,7 @@ def main() -> None:
     missing = set(WANT.values()) - set(found)
     if missing:
         raise SystemExit(f"missing Hallmark sets from Enrichr: {sorted(missing)}")
-    lines = [
-        f"{name}\tMSigDB_Hallmark_2020\t" + "\t".join(found[name])
-        for name in WANT.values()
-    ]
+    lines = [f"{name}\tMSigDB_Hallmark_2020\t" + "\t".join(found[name]) for name in WANT.values()]
     out.write_text("\n".join(lines) + "\n")
     for name in WANT.values():
         print(f"{name}: {len(found[name])} genes")

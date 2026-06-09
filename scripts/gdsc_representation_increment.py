@@ -66,7 +66,9 @@ def main() -> None:
 
     sub_it = inter(
         partial(SimpleProbe, n_components=onehot.shape[1], per_drug=True, std_floor=0.0),
-        onehot, dg, args.n_splits,
+        onehot,
+        dg,
+        args.n_splits,
     )
     reps: list[tuple[str, pd.DataFrame, str]] = [("expression", expr, "pca"), ("nmf", expr, "nmf")]
     if args.stack_gdsc:
@@ -75,8 +77,10 @@ def main() -> None:
         emb = emb.loc[emb.index.intersection(xg.index.astype(str))]
         reps.append(("stack", emb, "pca"))
 
-    print(f"GDSC2 sarcoma: {xg.shape[0]} cell lines, {dg['drug'].nunique()} drugs | "
-          f"interaction rho, leave-cell-line-out {args.n_splits}-fold, per-drug head")
+    print(
+        f"GDSC2 sarcoma: {xg.shape[0]} cell lines, {dg['drug'].nunique()} drugs | "
+        f"interaction rho, leave-cell-line-out {args.n_splits}-fold, per-drug head"
+    )
     print(f"subtype baseline interaction = {sub_it:+.3f}\n")
     print(f"{'representation':14s}" + "".join(f"{'k=' + str(k):>9}" for k in ks))
     for name, feat, red in reps:

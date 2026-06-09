@@ -66,8 +66,9 @@ def main() -> None:
         rho = float(np.asarray(spearmanr(preds["y_true"], preds["y_pred"]))[0])
         rx = preds["y_pred"].rank().to_numpy()
         ry = preds["y_true"].rank().to_numpy()
-        ax.plot([1, n], [1, n], color="0.6", lw=1, ls="--", zorder=0,
-                label="perfect rank agreement")
+        ax.plot(
+            [1, n], [1, n], color="0.6", lw=1, ls="--", zorder=0, label="perfect rank agreement"
+        )
         ax.scatter(rx, ry, s=20, alpha=0.5, edgecolor="none")
         ax.set_xlim(0, n + 1)
         ax.set_ylim(0, n + 1)

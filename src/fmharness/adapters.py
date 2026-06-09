@@ -92,7 +92,8 @@ class SzalaiLinearAdapter:
     def fit(self, delta: pd.DataFrame, viability: np.ndarray) -> SzalaiLinearAdapter:
         self._genes = [str(c) for c in delta.columns]
         self._model = Ridge(alpha=self._alpha).fit(
-            _zscore(delta).to_numpy(), np.asarray(viability, dtype=np.float64))
+            _zscore(delta).to_numpy(), np.asarray(viability, dtype=np.float64)
+        )
         return self
 
     def predict(self, delta: pd.DataFrame) -> np.ndarray:
@@ -108,8 +109,9 @@ class XGBoostAdapter:
     supervised = True
     citation = "Lu, Chen & Qin, BMC Bioinformatics 2021 (WRFEN-XGBoost)"
 
-    def __init__(self, n_features: int = 300, n_estimators: int = 400,
-                 max_depth: int = 4, seed: int = 0) -> None:
+    def __init__(
+        self, n_features: int = 300, n_estimators: int = 400, max_depth: int = 4, seed: int = 0
+    ) -> None:
         self._n_features = n_features
         self._n_estimators = n_estimators
         self._max_depth = max_depth
@@ -125,15 +127,22 @@ class XGBoostAdapter:
         z = _zscore(delta).to_numpy()
         y = np.asarray(viability, dtype=np.float64)
         # elastic-net key-gene selection before boosting (WRFEN selects genes first)
-        coef = ElasticNet(alpha=0.01, l1_ratio=0.5, max_iter=5000,
-                          random_state=self._seed).fit(z, y).coef_
+        coef = (
+            ElasticNet(alpha=0.01, l1_ratio=0.5, max_iter=5000, random_state=self._seed)
+            .fit(z, y)
+            .coef_
+        )
         nonzero = int(np.sum(coef != 0))
         k = min(self._n_features, nonzero) if nonzero else min(self._n_features, z.shape[1])
         idx = np.argsort(-np.abs(coef))[:k]
         self._genes = [str(delta.columns[i]) for i in idx]
         self._model = xgb.XGBRegressor(
-            n_estimators=self._n_estimators, max_depth=self._max_depth,
-            learning_rate=0.05, subsample=0.8, random_state=self._seed).fit(z[:, idx], y)
+            n_estimators=self._n_estimators,
+            max_depth=self._max_depth,
+            learning_rate=0.05,
+            subsample=0.8,
+            random_state=self._seed,
+        ).fit(z[:, idx], y)
         return self
 
     def predict(self, delta: pd.DataFrame) -> np.ndarray:

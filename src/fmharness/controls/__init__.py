@@ -23,9 +23,7 @@ from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 
 
-def permute_within_drug(
-    drug_ids: pd.Series, y: pd.Series, rng: np.random.Generator
-) -> np.ndarray:
+def permute_within_drug(drug_ids: pd.Series, y: pd.Series, rng: np.random.Generator) -> np.ndarray:
     """Return ``y`` shuffled among samples within each drug.
 
     Per-drug means and marginals are preserved exactly; only the assignment of

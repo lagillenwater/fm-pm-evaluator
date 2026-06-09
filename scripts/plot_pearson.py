@@ -54,7 +54,9 @@ def main() -> None:
     lim = (float(obs.min()) - pad, float(obs.max()) + pad)
 
     print(f"leave-organoid-out {args.n_splits}-fold CV, n={len(design)} pairs\n")
-    print(f"{'model':14s}{'pearson(all)':>14}{'pearson(in-win)':>17}{'spearman':>11}{'off-scale':>11}")
+    print(
+        f"{'model':14s}{'pearson(all)':>14}{'pearson(in-win)':>17}{'spearman':>11}{'off-scale':>11}"
+    )
     fig, axes = plt.subplots(1, len(models), figsize=(13, 4.6), sharex=True, sharey=True)
     for ax, (name, factory) in zip(axes, models.items(), strict=True):
         preds = grouped_cv_predict(factory, x_expr, design, n_splits=args.n_splits, seed=SEED)
@@ -80,9 +82,14 @@ def main() -> None:
         ax.set_xlabel("predicted AUC (held out)")
         if off:
             ax.text(
-                0.97, 0.04,
+                0.97,
+                0.04,
                 f"{off} off-scale (to {pred.max():.0f})\nr in-window = {r_win:+.3f}",
-                transform=ax.transAxes, ha="right", va="bottom", fontsize=8, color="crimson",
+                transform=ax.transAxes,
+                ha="right",
+                va="bottom",
+                fontsize=8,
+                color="crimson",
             )
     axes[0].set_ylabel("observed AUC")
     axes[0].legend(loc="upper left", fontsize=8, frameon=False)

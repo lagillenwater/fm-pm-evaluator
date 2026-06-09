@@ -37,21 +37,29 @@ def main() -> None:
     ap.add_argument("--generated-dir", required=True, help="dir of per-drug generated .h5ad")
     ap.add_argument("--baseline", default="data/reference/stack_input_soragni.h5ad")
     ap.add_argument("--n-permutations", type=int, default=1000)
-    ap.add_argument("--signatures", choices=["curated", "hallmark"], default="curated",
-                    help="curated death/proliferation set or the published MSigDB Hallmark sets")
+    ap.add_argument(
+        "--signatures",
+        choices=["curated", "hallmark"],
+        default="curated",
+        help="curated death/proliferation set or the published MSigDB Hallmark sets",
+    )
     args = ap.parse_args()
 
     repo = Path(__file__).resolve().parent.parent
-    sigs = (load_hallmark(repo / "data/static/hallmark_signatures.gmt")
-            if args.signatures == "hallmark" else None)
+    sigs = (
+        load_hallmark(repo / "data/static/hallmark_signatures.gmt")
+        if args.signatures == "hallmark"
+        else None
+    )
     _, design = build_sample_design(load_coderdata_tranche("sarcoma", repo), "organoid", "auc")
     p2s = soragni_pert_map(repo)
     print(f"  {len(p2s)} L1000 pert_id -> Soragni drug mappings")
 
     base_path = Path(args.baseline) if Path(args.baseline).is_absolute() else repo / args.baseline
     delta, key = build_generated_deltas(Path(args.generated_dir), base_path, p2s)
-    res = score_signatures(delta, key, design, signatures=sigs,
-                           n_perm=args.n_permutations, seed=SEED)
+    res = score_signatures(
+        delta, key, design, signatures=sigs, n_perm=args.n_permutations, seed=SEED
+    )
     print(f"\ngenerated readout vs Soragni viability ({len(key)} organoid x drug)")
     print("PASS only if interaction > rnd_p95 (negative control) and p_label is small\n")
     print(res.to_string(index=False))

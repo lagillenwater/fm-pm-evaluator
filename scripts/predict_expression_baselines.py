@@ -75,16 +75,18 @@ def pertid_to_drug(repo: Path, drugs: set[str]) -> dict[str, str]:
     return out
 
 
-def _broadcast(per_drug: dict[str, np.ndarray], orgs: list[str], genes: pd.Index,
-               ) -> tuple[pd.DataFrame, pd.DataFrame]:
+def _broadcast(
+    per_drug: dict[str, np.ndarray],
+    orgs: list[str],
+    genes: pd.Index,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Turn a {drug: delta_vector} (organoid-independent) into aligned delta/key frames."""
     rows, key = [], []
     for drug, vec in per_drug.items():
         for org in orgs:
             rows.append(vec)
             key.append((org, drug))
-    return (pd.DataFrame(rows, columns=genes),
-            pd.DataFrame(key, columns=["patient", "drug"]))
+    return (pd.DataFrame(rows, columns=genes), pd.DataFrame(key, columns=["patient", "drug"]))
 
 
 def main() -> None:
@@ -98,29 +100,34 @@ def main() -> None:
     args = ap.parse_args()
 
     repo = Path(__file__).resolve().parent.parent
-    sigs = (load_hallmark(repo / "data/static/hallmark_signatures.gmt")
-            if args.signatures == "hallmark" else None)
+    sigs = (
+        load_hallmark(repo / "data/static/hallmark_signatures.gmt")
+        if args.signatures == "hallmark"
+        else None
+    )
     _, design = build_sample_design(load_coderdata_tranche("sarcoma", repo), "organoid", "auc")
 
-    base = ad.read_h5ad(repo / args.baseline if not Path(args.baseline).is_absolute()
-                        else Path(args.baseline))
+    base = ad.read_h5ad(
+        repo / args.baseline if not Path(args.baseline).is_absolute() else Path(args.baseline)
+    )
     ctx = ad.read_h5ad(args.l1000_context)
-    genes = pd.Index([str(g) for g in base.var_names]).intersection(
-        [str(g) for g in ctx.var_names])
+    genes = pd.Index([str(g) for g in base.var_names]).intersection([str(g) for g in ctx.var_names])
     bmap = {str(g): i for i, g in enumerate(base.var_names)}
     cmap = {str(g): i for i, g in enumerate(ctx.var_names)}
     bcols = [bmap[g] for g in genes]
     ccols = [cmap[g] for g in genes]
-    b = _dense(base.X)[:, bcols]                       # organoids x G
+    b = _dense(base.X)[:, bcols]  # organoids x G
     orgs = [str(o) for o in base.obs_names]
-    cx = _dense(ctx.X)[:, ccols]                       # wells x G
+    cx = _dense(ctx.X)[:, ccols]  # wells x G
     cell = ctx.obs["cell_id"].astype(str).to_numpy()
     pert = ctx.obs["pert_id"].astype(str).to_numpy()
     isc = ctx.obs["is_control"].to_numpy().astype(bool)
     p2d = pertid_to_drug(repo, set(design["drug"].astype(str)))
     drugs = sorted({p2d[p] for p in np.unique(pert[~isc]) if p in p2d})
-    print(f"genes {len(genes)} | mapped drugs {len(drugs)} | organoids {len(orgs)} "
-          f"| L1000 wells {cx.shape[0]}")
+    print(
+        f"genes {len(genes)} | mapped drugs {len(drugs)} | organoids {len(orgs)} "
+        f"| L1000 wells {cx.shape[0]}"
+    )
 
     # per-cell-line DMSO mean (control) and a global DMSO mean
     lines = list(np.unique(cell[isc]))
@@ -134,7 +141,7 @@ def main() -> None:
     sd[sd == 0] = 1.0
     sb_mu, sb_sd = b.mean(0), b.std(0)
     sb_sd[sb_sd == 0] = 1.0
-    zb = (b - sb_mu) / sb_sd                            # Soragni baseline in its own z-units
+    zb = (b - sb_mu) / sb_sd  # Soragni baseline in its own z-units
 
     def conditional(reducer: str) -> tuple[pd.DataFrame, pd.DataFrame]:
         zc = (cmat - mu) / sd
@@ -143,10 +150,13 @@ def main() -> None:
             tx = red.transform
         else:
             shift = float(zc.min())
-            nm = NMF(n_components=args.n_components, init="nndsvda", max_iter=1000,
-                     random_state=SEED).fit(zc - shift)
+            nm = NMF(
+                n_components=args.n_components, init="nndsvda", max_iter=1000, random_state=SEED
+            ).fit(zc - shift)
+
             def tx(m: np.ndarray) -> np.ndarray:
                 return nm.transform(m - shift)
+
         zb_r = tx(zb)
         rows, key = [], []
         for pid in np.unique(pert[~isc]):
@@ -158,8 +168,8 @@ def main() -> None:
             td = np.array([cx[(pert == pid) & ~isc & (cell == c)].mean(0) for c in have])
             cd = np.array([ctrl[c] for c in have])
             zdelta = (td - cd) / sd
-            coef = Ridge(alpha=1.0).fit(tx((cd - mu) / sd), zdelta).coef_   # G x k
-            delta_s = zb_r @ coef.T                                          # organoids x G
+            coef = Ridge(alpha=1.0).fit(tx((cd - mu) / sd), zdelta).coef_  # G x k
+            delta_s = zb_r @ coef.T  # organoids x G
             rows.extend(delta_s)
             key.extend((org, p2d[pid]) for org in orgs)
         return pd.DataFrame(rows, columns=genes), pd.DataFrame(key, columns=["patient", "drug"])
@@ -168,8 +178,9 @@ def main() -> None:
     methods: dict[str, tuple[pd.DataFrame, pd.DataFrame]] = {}
     zero = dict.fromkeys(drugs, np.zeros(len(genes)))
     methods["control"] = _broadcast(zero, orgs, genes)
-    mean_delta = {p2d[p]: cx[(pert == p) & ~isc].mean(0) - dmso
-                  for p in np.unique(pert[~isc]) if p in p2d}
+    mean_delta = {
+        p2d[p]: cx[(pert == p) & ~isc].mean(0) - dmso for p in np.unique(pert[~isc]) if p in p2d
+    }
     methods["mean"] = _broadcast(mean_delta, orgs, genes)
     methods["pca"] = conditional("pca")
     methods["nmf"] = conditional("nmf")

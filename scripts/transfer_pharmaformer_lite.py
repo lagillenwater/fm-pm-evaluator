@@ -37,8 +37,12 @@ from fmharness.evaluation import build_sample_design, interaction_rho, within_dr
 
 SEED = 0
 GDSC_SARCOMA = [
-    "Alveolar Rhabdomyosarcoma", "Chondrosarcoma", "Ewing's Sarcoma",
-    "Osteosarcoma", "Other Sarcomas", "Rhabdomyosarcoma",
+    "Alveolar Rhabdomyosarcoma",
+    "Chondrosarcoma",
+    "Ewing's Sarcoma",
+    "Osteosarcoma",
+    "Other Sarcomas",
+    "Rhabdomyosarcoma",
 ]
 _ALPHAS = tuple(float(a) for a in np.logspace(-1.0, 6.0, 8))
 
@@ -107,12 +111,17 @@ def main() -> None:
     gdf = pd.DataFrame(gpca.transform(fp), index=fp.index)
 
     # fit bilinear ridge on GDSC2, predict Soragni
-    fpipe = Pipeline([("sc", StandardScaler()),
-                      ("ridge", RidgeCV(alphas=np.asarray(_ALPHAS)))])
+    fpipe = Pipeline([("sc", StandardScaler()), ("ridge", RidgeCV(alphas=np.asarray(_ALPHAS)))])
     fpipe.fit(_features(dg, zg, gdf), dg["y"].to_numpy(float))
     pred = fpipe.predict(_features(ds, zs, gdf))
-    preds = pd.DataFrame({"patient": list(ds["patient"]), "drug": list(ds["drug"]),
-                          "y_true": ds["y"].to_numpy(float), "y_pred": pred})
+    preds = pd.DataFrame(
+        {
+            "patient": list(ds["patient"]),
+            "drug": list(ds["drug"]),
+            "y_true": ds["y"].to_numpy(float),
+            "y_pred": pred,
+        }
+    )
 
     # in-distribution sanity: does the model capture interaction on held-out GDSC2 lines?
     rng = np.random.default_rng(SEED)
@@ -122,16 +131,26 @@ def main() -> None:
     chk = Pipeline([("sc", StandardScaler()), ("ridge", RidgeCV(alphas=np.asarray(_ALPHAS)))])
     chk.fit(_features(tr, zg, gdf), tr["y"].to_numpy(float))
     te_pred = chk.predict(_features(te, zg, gdf))
-    idp = pd.DataFrame({"patient": list(te["patient"]), "drug": list(te["drug"]),
-                        "y_true": te["y"].to_numpy(float), "y_pred": te_pred})
+    idp = pd.DataFrame(
+        {
+            "patient": list(te["patient"]),
+            "drug": list(te["drug"]),
+            "y_true": te["y"].to_numpy(float),
+            "y_pred": te_pred,
+        }
+    )
 
     shared = sorted(set(ds["drug"].astype(str)) & set(dg["drug"].astype(str)))
     shared_sub = preds[preds["drug"].astype(str).isin(shared)]
     train_kind = "pan-cancer" if args.pan_cancer else "sarcoma"
-    print(f"train: GDSC2 {train_kind} {dg['patient'].nunique()} lines x "
-          f"{dg['drug'].nunique()} drugs ({len(dg)} pairs) | test: Soragni {len(ds)} rows")
-    print(f"in-dist GDSC2 held-out lines: interaction {interaction_rho(idp, 'y_pred'):+.3f} "
-          f"(n={len(te)})")
+    print(
+        f"train: GDSC2 {train_kind} {dg['patient'].nunique()} lines x "
+        f"{dg['drug'].nunique()} drugs ({len(dg)} pairs) | test: Soragni {len(ds)} rows"
+    )
+    print(
+        f"in-dist GDSC2 held-out lines: interaction {interaction_rho(idp, 'y_pred'):+.3f} "
+        f"(n={len(te)})"
+    )
     print(f"\n{'drug set':16s}{'n_drugs':>8}{'global_sp':>10}{'within':>9}{'interact':>10}{'p':>8}")
     for label, sub in (("all soragni", preds), ("16 shared", shared_sub)):
         gs, wd, it, pv, nd = _score(sub, args.n_permutations)

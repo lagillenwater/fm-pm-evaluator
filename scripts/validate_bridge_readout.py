@@ -28,23 +28,37 @@ def main() -> None:
     ap.add_argument("--gctx", required=True)
     ap.add_argument("--time", type=float, default=24.0, help="L1000 pert_time to use")
     ap.add_argument("--n-permutations", type=int, default=1000)
-    ap.add_argument("--chunk", type=int, default=2000,
-                    help="gctx columns read per chunk (caps peak memory)")
-    ap.add_argument("--treated-cap", type=int, default=8,
-                    help="max treated wells averaged per (cell, drug)")
+    ap.add_argument(
+        "--chunk", type=int, default=2000, help="gctx columns read per chunk (caps peak memory)"
+    )
+    ap.add_argument(
+        "--treated-cap", type=int, default=8, help="max treated wells averaged per (cell, drug)"
+    )
     ap.add_argument("--dmso-cap", type=int, default=60, help="max DMSO wells averaged per cell")
-    ap.add_argument("--signatures", choices=["curated", "hallmark"], default="curated",
-                    help="curated death/proliferation set or the published MSigDB Hallmark sets")
+    ap.add_argument(
+        "--signatures",
+        choices=["curated", "hallmark"],
+        default="curated",
+        help="curated death/proliferation set or the published MSigDB Hallmark sets",
+    )
     args = ap.parse_args()
 
     repo = Path(__file__).resolve().parent.parent
-    sigs = (load_hallmark(repo / "data/static/hallmark_signatures.gmt")
-            if args.signatures == "hallmark" else None)
+    sigs = (
+        load_hallmark(repo / "data/static/hallmark_signatures.gmt")
+        if args.signatures == "hallmark"
+        else None
+    )
     delta, key, dg = build_l1000_gdsc_pairs(
-        repo, Path(args.l1000_dir), args.gctx, time=args.time, chunk=args.chunk,
-        treated_cap=args.treated_cap, dmso_cap=args.dmso_cap)
-    res = score_signatures(delta, key, dg, signatures=sigs,
-                           n_perm=args.n_permutations, seed=SEED)
+        repo,
+        Path(args.l1000_dir),
+        args.gctx,
+        time=args.time,
+        chunk=args.chunk,
+        treated_cap=args.treated_cap,
+        dmso_cap=args.dmso_cap,
+    )
+    res = score_signatures(delta, key, dg, signatures=sigs, n_perm=args.n_permutations, seed=SEED)
     print(f"\nreadout vs GDSC2 viability  ({len(key)} cell-line x drug deltas)")
     print("PASS only if interaction > rnd_p95 (negative control) and p_label is small\n")
     print(res.to_string(index=False))
