@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from fmharness.data.loaders import load_coderdata_tranche
+from fmharness.data.loaders import load_tranche
 from fmharness.evaluation import build_sample_design
 from fmharness.stack_panel import build_panel
 
@@ -31,8 +31,8 @@ def main() -> None:
         if g.strip()
     ]
     genes = pd.read_csv(repo / "data/raw/coderdata/genes.csv.gz")
-    bundle = load_coderdata_tranche("sarcoma", repo)
-    x_df, _ = build_sample_design(bundle, "organoid", "auc")
+    bundle = load_tranche("sarcoma", repo)
+    x_df, _ = build_sample_design(bundle, "organoid", "viability")
     measured = {int(c) for c in x_df.columns}
 
     panel = build_panel(genes, measured, stack)

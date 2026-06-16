@@ -21,7 +21,7 @@ import pandas as pd
 
 from fmharness.adapters import ALL_METHODS, build_adapters
 from fmharness.controls import permute_within_drug
-from fmharness.data.loaders import load_coderdata_tranche
+from fmharness.data.loaders import load_tranche
 from fmharness.evaluation import build_sample_design, global_spearman, interaction_rho
 from fmharness.l1000 import build_generated_deltas, build_l1000_gdsc_pairs, soragni_pert_map
 from fmharness.signatures import load_hallmark
@@ -82,7 +82,7 @@ def main() -> None:
     )
 
     # target: Stack-generated Soragni deltas + real Soragni AUC
-    _, design = build_sample_design(load_coderdata_tranche("sarcoma", repo), "organoid", "auc")
+    _, design = build_sample_design(load_tranche("sarcoma", repo), "organoid", "viability")
     base_path = Path(args.baseline) if Path(args.baseline).is_absolute() else repo / args.baseline
     tgt_delta, tgt_key = build_generated_deltas(
         Path(args.generated_dir), base_path, soragni_pert_map(repo)

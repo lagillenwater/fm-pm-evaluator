@@ -36,7 +36,7 @@ import numpy as np
 import pandas as pd
 
 from fmharness.controls import permute_within_drug
-from fmharness.data.loaders import load_coderdata_tranche
+from fmharness.data.loaders import load_tranche
 from fmharness.evaluation import (
     build_sample_design,
     global_spearman,
@@ -70,8 +70,10 @@ def main() -> None:
     args = ap.parse_args()
 
     repo = Path(__file__).resolve().parent.parent
-    bundle = load_coderdata_tranche(args.dataset, repo)
-    x_df, design = build_sample_design(bundle, args.rna_source, "auc")
+    bundle = load_tranche(args.dataset, repo)
+    # Soragni's response metric is Viability_Score; GDSC2's is AUC.
+    metric = "viability" if args.dataset in ("sarcoma", "soragni") else "auc"
+    x_df, design = build_sample_design(bundle, args.rna_source, metric)
     print(
         f"{args.dataset} ({args.rna_source}): {x_df.shape[0]} organoids x {x_df.shape[1]} genes; "
         f"{len(design)} (organoid,drug) rows; {design['drug'].nunique()} drugs"

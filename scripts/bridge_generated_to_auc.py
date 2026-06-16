@@ -24,7 +24,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from fmharness.data.loaders import load_coderdata_tranche
+from fmharness.data.loaders import load_tranche
 from fmharness.evaluation import build_sample_design
 from fmharness.l1000 import build_generated_deltas, soragni_pert_map
 from fmharness.signatures import load_hallmark, score_signatures
@@ -51,7 +51,7 @@ def main() -> None:
         if args.signatures == "hallmark"
         else None
     )
-    _, design = build_sample_design(load_coderdata_tranche("sarcoma", repo), "organoid", "auc")
+    _, design = build_sample_design(load_tranche("sarcoma", repo), "organoid", "viability")
     p2s = soragni_pert_map(repo)
     print(f"  {len(p2s)} L1000 pert_id -> Soragni drug mappings")
 

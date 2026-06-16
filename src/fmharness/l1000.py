@@ -24,7 +24,7 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 
-from fmharness.data.loaders import load_coderdata_tranche
+from fmharness.data.loaders import load_tranche
 from fmharness.evaluation import build_sample_design
 
 PERT_INFO_URL = (
@@ -91,7 +91,7 @@ def soragni_pert_map(repo: Path) -> dict[str, str]:
         urllib.request.urlretrieve(PERT_INFO_URL, cache)
     pert = pd.read_csv(cache, sep="\t", low_memory=False)
     dr = pd.read_csv(repo / "data/raw/coderdata/sarcoma_drugs.tsv.gz", sep="\t")
-    _, ds = build_sample_design(load_coderdata_tranche("sarcoma", repo), "organoid", "auc")
+    _, ds = build_sample_design(load_tranche("sarcoma", repo), "organoid", "viability")
     soragni_drugs = list({str(d) for d in ds["drug"]})
     sor = cast("pd.DataFrame", dr[dr["improve_drug_id"].astype(str).isin(soragni_drugs)])
     _, pert2drug = drug_pert_maps(sor, pert)
@@ -188,7 +188,7 @@ def build_l1000_gdsc_pairs(
         l1000_dir / "GSE92742_Broad_LINCS_inst_info.txt.gz", sep="\t", low_memory=False
     )
     gene = pd.read_csv(l1000_dir / "GSE92742_Broad_LINCS_gene_info.txt.gz", sep="\t")
-    xg, dg = build_sample_design(load_coderdata_tranche("gdscv2", repo), "all", "auc")
+    xg, dg = build_sample_design(load_tranche("gdscv2", repo), "all", "auc")
     gdr = pd.read_csv(repo / "data/raw/coderdata/gdscv2_drugs.tsv.gz", sep="\t")
     _, pert2drug = drug_pert_maps(gdr, pert)
 

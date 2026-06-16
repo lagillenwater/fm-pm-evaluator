@@ -28,7 +28,7 @@ import pandas as pd
 from scipy.stats import pearsonr, spearmanr
 
 from fmharness.controls import permute_within_drug
-from fmharness.data.loaders import load_coderdata_tranche
+from fmharness.data.loaders import load_tranche
 from fmharness.evaluation import build_sample_design, interaction_rho, within_drug_rho
 from fmharness.probe import SimpleProbe
 
@@ -91,9 +91,9 @@ def main() -> None:
     args = ap.parse_args()
 
     repo = Path(__file__).resolve().parent.parent
-    xs, ds = build_sample_design(load_coderdata_tranche("sarcoma", repo), "organoid", "auc")
+    xs, ds = build_sample_design(load_tranche("sarcoma", repo), "organoid", "viability")
     ctf = GDSC_SARCOMA if args.sarcoma_only else None
-    gd = load_coderdata_tranche("gdscv2", repo, cancer_type_filter=ctf)
+    gd = load_tranche("gdscv2", repo, cancer_type_filter=ctf)
     xg, dg = build_sample_design(gd, "all", "auc")
 
     shared = sorted(set(ds["drug"].astype(str)) & set(dg["drug"].astype(str)))

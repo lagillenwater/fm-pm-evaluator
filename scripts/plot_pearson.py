@@ -26,7 +26,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy.stats import pearsonr, spearmanr
 
-from fmharness.data.loaders import load_coderdata_tranche
+from fmharness.data.loaders import load_tranche
 from fmharness.evaluation import build_sample_design, grouped_cv_predict
 from fmharness.probe import SimpleProbe
 
@@ -39,8 +39,8 @@ def main() -> None:
     args = ap.parse_args()
 
     repo = Path(__file__).resolve().parent.parent
-    bundle = load_coderdata_tranche("sarcoma", repo)
-    x_df, design = build_sample_design(bundle, "organoid", "auc")
+    bundle = load_tranche("sarcoma", repo)
+    x_df, design = build_sample_design(bundle, "organoid", "viability")
     x_expr = np.log1p(x_df)
 
     models = {

@@ -24,7 +24,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from fmharness.data.loaders import load_coderdata_tranche
+from fmharness.data.loaders import load_tranche
 from fmharness.evaluation import build_sample_design, grouped_cv_predict, interaction_rho
 from fmharness.probe import SimpleProbe
 
@@ -53,7 +53,7 @@ def main() -> None:
     ks = [int(x) for x in args.components.split(",")]
 
     repo = Path(__file__).resolve().parent.parent
-    bundle = load_coderdata_tranche("gdscv2", repo, cancer_type_filter=GDSC_SARCOMA)
+    bundle = load_tranche("gdscv2", repo, cancer_type_filter=GDSC_SARCOMA)
     xg, dg = build_sample_design(bundle, "all", "auc")
     ct = (
         pd.read_csv(repo / "data/raw/coderdata/gdscv2_samples.csv")

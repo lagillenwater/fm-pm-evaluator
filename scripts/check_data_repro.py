@@ -25,7 +25,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from fmharness.data.loaders import load_coderdata_tranche
+from fmharness.data.loaders import load_tranche
 from fmharness.evaluation import build_sample_design
 from fmharness.stack_panel import build_panel
 
@@ -44,8 +44,8 @@ def main() -> None:
     for pkg in ("coderdata", "numpy", "pandas", "anndata"):
         print(f"  {pkg:10s} {version(pkg)}")
 
-    bundle = load_coderdata_tranche("sarcoma", repo)
-    x_df, design = build_sample_design(bundle, "organoid", "auc")
+    bundle = load_tranche("sarcoma", repo)
+    x_df, design = build_sample_design(bundle, "organoid", "viability")
 
     raw = repo / "data/raw/coderdata"
     print("\n-- raw download content (sha256[:16]) --")

@@ -31,7 +31,7 @@ import numpy as np
 import pandas as pd
 
 from fmharness.controls import permute_within_drug
-from fmharness.data.loaders import load_coderdata_tranche
+from fmharness.data.loaders import load_tranche
 from fmharness.evaluation import build_sample_design, global_spearman, interaction_rho
 from fmharness.probe import SimpleProbe
 from fmharness.signatures import load_hallmark, sensitivity_scores
@@ -185,8 +185,8 @@ def main() -> None:
         if args.signatures == "hallmark"
         else None
     )
-    xs, ds = build_sample_design(load_coderdata_tranche("sarcoma", repo), "organoid", "auc")
-    xg, dg = build_sample_design(load_coderdata_tranche("gdscv2", repo), "all", "auc")
+    xs, ds = build_sample_design(load_tranche("sarcoma", repo), "organoid", "viability")
+    xg, dg = build_sample_design(load_tranche("gdscv2", repo), "all", "auc")
     gdsc_drugs = set(dg["drug"].astype(str))
 
     # direct-L1000 defines Path B's drug set (the L1000-matched drugs) when a context is given
