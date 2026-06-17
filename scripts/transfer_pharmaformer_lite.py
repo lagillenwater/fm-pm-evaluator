@@ -48,14 +48,26 @@ _ALPHAS = tuple(float(a) for a in np.logspace(-1.0, 6.0, 8))
 
 
 def load_fingerprints(repo: Path) -> pd.DataFrame:
-    """drug_id -> 1024-bit Morgan fingerprint, unioned across both tranches."""
+    """PubChem CID -> 1024-bit Morgan fingerprint, unioned across both tranches.
+
+    Keyed by CID so it joins the CID-keyed designs (build_sample_design with
+    drug_key='pubchem_cid'). CoderData's drug_descriptors are keyed by
+    improve_drug_id, which the matching drugs table maps to a PubChem CID.
+    """
     frames = []
     for ds in ("gdscv2", "sarcoma"):
         d = pd.read_csv(repo / f"data/raw/coderdata/{ds}_drug_descriptors.tsv.gz", sep="\t")
-        frames.append(d[d["structural_descriptor"] == "morgan fingerprint"])
-    mf = pd.concat(frames).drop_duplicates("improve_drug_id")
+        d = d[d["structural_descriptor"] == "morgan fingerprint"]
+        drugs = pd.read_csv(repo / f"data/raw/coderdata/{ds}_drugs.tsv.gz", sep="\t")
+        id2cid = {
+            str(i): str(int(c))
+            for i, c in zip(drugs["improve_drug_id"], drugs["pubchem_id"], strict=False)
+            if pd.notna(c)
+        }
+        frames.append(d.assign(cid=d["improve_drug_id"].astype(str).map(id2cid)))
+    mf = pd.concat(frames).dropna(subset=["cid"]).drop_duplicates("cid")
     bits = np.array([[int(c) for c in str(v)] for v in mf["descriptor_value"]], dtype=np.float64)
-    return pd.DataFrame(bits, index=mf["improve_drug_id"].astype(str))
+    return pd.DataFrame(bits, index=pd.Index(mf["cid"].astype(str)))
 
 
 def _features(design: pd.DataFrame, zdf: pd.DataFrame, gdf: pd.DataFrame) -> np.ndarray:
@@ -88,10 +100,13 @@ def main() -> None:
     args = ap.parse_args()
 
     repo = Path(__file__).resolve().parent.parent
-    xs, ds = build_sample_design(load_tranche("sarcoma", repo), "organoid", "viability")
+    # Join GDSC2 <-> Soragni (and the fingerprint table) on PubChem CID.
+    xs, ds = build_sample_design(
+        load_tranche("sarcoma", repo), "organoid", "viability", drug_key="pubchem_cid"
+    )
     ctf = None if args.pan_cancer else GDSC_SARCOMA
     gbun = load_tranche("gdscv2", repo, cancer_type_filter=ctf)
-    xg, dg = build_sample_design(gbun, "all", "auc")
+    xg, dg = build_sample_design(gbun, "all", "auc", drug_key="pubchem_cid")
     fp = load_fingerprints(repo)
 
     # keep rows whose drug has a fingerprint

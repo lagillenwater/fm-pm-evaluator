@@ -19,10 +19,13 @@ def test_logcpm_is_scale_invariant() -> None:
 
 
 def test_drug_pert_maps_cid_and_inchikey() -> None:
+    # D3 carries a CID (777) whose CID has no matching pert, but its InChIKey
+    # prefix does -- so it must still resolve, keyed by its CID. D2's CID matches
+    # neither a pert CID nor InChIKey. Drugs are keyed by PubChem CID (string).
     drugs = pd.DataFrame(
         {
             "improve_drug_id": ["D1", "D2", "D3"],
-            "pubchem_id": [123, 999999, None],
+            "pubchem_id": [123, 999999, 777],
             "InChIKey": ["AAAAAAAAAAAAAA-x", "BBB-y", "CCCCCCCCCCCCCC-z"],
         }
     )
@@ -35,10 +38,10 @@ def test_drug_pert_maps_cid_and_inchikey() -> None:
         }
     )
     drug2pert, pert2drug = drug_pert_maps(drugs, pert)
-    assert drug2pert["D1"] == "BRD-A"  # matched by PubChem CID 123
-    assert drug2pert["D3"] == "BRD-C"  # matched by 14-char InChIKey prefix
-    assert "D2" not in drug2pert  # no CID / InChIKey match
-    assert pert2drug["BRD-A"] == "D1"
+    assert drug2pert["123"] == "BRD-A"  # matched by PubChem CID 123
+    assert drug2pert["777"] == "BRD-C"  # matched by 14-char InChIKey prefix
+    assert "999999" not in drug2pert  # no CID / InChIKey match
+    assert pert2drug["BRD-A"] == "123"
 
 
 def _write_adata(path: Path, x: list[list[float]], obs: list[str], var: list[str]) -> None:

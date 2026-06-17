@@ -1,11 +1,16 @@
 """Transfer: train the head on GDSC2 cell lines, predict FROZEN on Soragni.
 
-GDSC2 has the interaction power Soragni lacks (~750 cell lines per drug). We fit
+GDSC2 has the interaction power Soragni lacks (many cell lines per drug). We fit
 the drug-mean + ridge head on GDSC2 over the genes and drugs shared with Soragni,
 freeze it, and predict Soragni organoids -- never training on Soragni. This is
 the powered test the within-Soragni benchmark cannot be: GDSC2 learns, for each
 drug, the expression direction that predicts response, and we ask whether that
 transfers to sarcoma organoids.
+
+Trains on the sarcoma cell lines by default: the sarcoma-specific drug x organoid
+interaction transfers only from in-domain training; the full pan-cancer panel
+(--pan-cancer) washes it out. The general-sensitivity (substrate) gap is the
+same either way.
 
 The representation is swappable: log1p expression now, Stack embeddings via
 --stack-gdsc/--stack-soragni (CSV indexed by cell-line / organoid id). Two heads
@@ -85,16 +90,23 @@ def main() -> None:
     ap.add_argument("--n-components", type=int, default=10)
     ap.add_argument("--std-floor", type=float, default=0.5)
     ap.add_argument("--n-permutations", type=int, default=1000)
-    ap.add_argument("--sarcoma-only", action="store_true", help="restrict GDSC2 to sarcoma types")
+    # Default to sarcoma-only GDSC2: training on the full pan-cancer panel washes
+    # out the sarcoma-specific drug x organoid interaction signal (it survives the
+    # permutation null only when trained in-domain). --pan-cancer opts back in.
+    ap.add_argument("--pan-cancer", action="store_true", help="train on all GDSC2 lineages")
     ap.add_argument("--stack-gdsc", default=None)
     ap.add_argument("--stack-soragni", default=None)
     args = ap.parse_args()
 
     repo = Path(__file__).resolve().parent.parent
-    xs, ds = build_sample_design(load_tranche("sarcoma", repo), "organoid", "viability")
-    ctf = GDSC_SARCOMA if args.sarcoma_only else None
+    # Join GDSC2 <-> Soragni on PubChem CID: their native drug ids share no
+    # namespace (Soragni uses drug names, GDSC2 numeric DRUG_IDs).
+    xs, ds = build_sample_design(
+        load_tranche("sarcoma", repo), "organoid", "viability", drug_key="pubchem_cid"
+    )
+    ctf = None if args.pan_cancer else GDSC_SARCOMA
     gd = load_tranche("gdscv2", repo, cancer_type_filter=ctf)
-    xg, dg = build_sample_design(gd, "all", "auc")
+    xg, dg = build_sample_design(gd, "all", "auc", drug_key="pubchem_cid")
 
     shared = sorted(set(ds["drug"].astype(str)) & set(dg["drug"].astype(str)))
     ds = ds[ds["drug"].astype(str).isin(shared)].copy()

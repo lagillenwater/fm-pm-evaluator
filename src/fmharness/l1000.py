@@ -68,32 +68,41 @@ def drug_pert_maps(
     drugs: pd.DataFrame,
     pert_info: pd.DataFrame,
 ) -> tuple[dict[str, str], dict[str, str]]:
-    """``(drug2pert, pert2drug)`` mapping CoderData ``improve_drug_id`` to L1000
-    ``trt_cp`` pert_ids by PubChem CID or InChIKey prefix. ``drugs`` needs columns
-    ``improve_drug_id``, ``pubchem_id``, ``InChIKey``."""
+    """``(drug2pert, pert2drug)`` mapping **PubChem CID** (string) to L1000
+    ``trt_cp`` pert_ids by PubChem CID or InChIKey prefix. CID is the canonical
+    cross-dataset drug key the designs use (build_sample_design
+    drug_key='pubchem_cid'); drugs without a CID are skipped. ``drugs`` needs
+    columns ``pubchem_id``, ``InChIKey``."""
     cp = pert_info[pert_info["pert_type"] == "trt_cp"]
     cid2p = {_ncid(c): p for c, p in zip(cp["pubchem_cid"], cp["pert_id"], strict=True)}
     ikb2p = {str(k): p for k, p in zip(cp["inchi_key_prefix"], cp["pert_id"], strict=True)}
     drug2pert: dict[str, str] = {}
     pert2drug: dict[str, str] = {}
     for _, r in drugs.drop_duplicates("improve_drug_id").iterrows():
+        try:
+            cid = str(int(r["pubchem_id"]))  # skips None / NaN (no canonical CID)
+        except (TypeError, ValueError):
+            continue
         pid = cid2p.get(_ncid(r["pubchem_id"])) or ikb2p.get(str(r["InChIKey"])[:14])
         if pid:
-            drug2pert[str(r["improve_drug_id"])] = pid
-            pert2drug[pid] = str(r["improve_drug_id"])
+            drug2pert[cid] = pid
+            pert2drug[pid] = cid
     return drug2pert, pert2drug
 
 
 def soragni_pert_map(repo: Path) -> dict[str, str]:
-    """pert_id -> Soragni ``improve_drug_id`` (downloads L1000 pert_info to /tmp)."""
+    """pert_id -> Soragni PubChem CID (string) (downloads L1000 pert_info to /tmp)."""
     cache = Path("/tmp/l1000_pert_info.txt.gz")
     if not cache.exists():
         urllib.request.urlretrieve(PERT_INFO_URL, cache)
     pert = pd.read_csv(cache, sep="\t", low_memory=False)
     dr = pd.read_csv(repo / "data/raw/coderdata/sarcoma_drugs.tsv.gz", sep="\t")
-    _, ds = build_sample_design(load_tranche("sarcoma", repo), "organoid", "viability")
-    soragni_drugs = list({str(d) for d in ds["drug"]})
-    sor = cast("pd.DataFrame", dr[dr["improve_drug_id"].astype(str).isin(soragni_drugs)])
+    _, ds = build_sample_design(
+        load_tranche("sarcoma", repo), "organoid", "viability", drug_key="pubchem_cid"
+    )
+    soragni_cids = [str(d) for d in ds["drug"]]
+    dr_cid = dr["pubchem_id"].map(lambda c: str(int(c)) if pd.notna(c) else None)
+    sor = cast("pd.DataFrame", dr[dr_cid.isin(soragni_cids)])
     _, pert2drug = drug_pert_maps(sor, pert)
     return pert2drug
 
@@ -188,7 +197,7 @@ def build_l1000_gdsc_pairs(
         l1000_dir / "GSE92742_Broad_LINCS_inst_info.txt.gz", sep="\t", low_memory=False
     )
     gene = pd.read_csv(l1000_dir / "GSE92742_Broad_LINCS_gene_info.txt.gz", sep="\t")
-    xg, dg = build_sample_design(load_tranche("gdscv2", repo), "all", "auc")
+    xg, dg = build_sample_design(load_tranche("gdscv2", repo), "all", "auc", drug_key="pubchem_cid")
     gdr = pd.read_csv(repo / "data/raw/coderdata/gdscv2_drugs.tsv.gz", sep="\t")
     _, pert2drug = drug_pert_maps(gdr, pert)
 

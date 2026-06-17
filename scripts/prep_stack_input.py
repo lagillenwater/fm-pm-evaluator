@@ -77,6 +77,11 @@ def main() -> None:
     ap.add_argument("--dataset", default="sarcoma")
     ap.add_argument("--rna-source", default="organoid", choices=["all", "organoid", "tumor"])
     ap.add_argument(
+        "--sarcoma-only",
+        action="store_true",
+        help="restrict gdscv2 to sarcoma lineages, so Stack's in-context prompt is sarcoma-only",
+    )
+    ap.add_argument(
         "--log1p", action="store_true", help="log1p the CPM (ablation; Stack log1ps internally)"
     )
     ap.add_argument("--out", default=None)
@@ -84,7 +89,9 @@ def main() -> None:
 
     repo = Path(__file__).resolve().parent.parent
     gmap = pd.read_csv(repo / "data/static/stack_soragni_gene_map.csv")
-    bundle = _cpm_bundle(load_tranche(args.dataset, repo))
+    # A non-None cancer_type_filter signals the gdscv2 loader to restrict to sarcoma.
+    ctf = ["sarcoma"] if args.sarcoma_only else None
+    bundle = _cpm_bundle(load_tranche(args.dataset, repo, cancer_type_filter=ctf))
     # metric is irrelevant here (we keep only the expression frame); pass the
     # cohort's real metric so build_sample_design does not warn on an empty design.
     metric = "viability" if args.dataset in ("sarcoma", "soragni") else "auc"
