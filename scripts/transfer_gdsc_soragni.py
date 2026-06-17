@@ -34,7 +34,12 @@ from scipy.stats import pearsonr, spearmanr
 
 from fmharness.controls import permute_within_drug
 from fmharness.data.loaders import load_tranche
-from fmharness.evaluation import build_sample_design, interaction_rho, within_drug_rho
+from fmharness.evaluation import (
+    build_sample_design,
+    cpm_bundle,
+    interaction_rho,
+    within_drug_rho,
+)
 from fmharness.probe import SimpleProbe
 
 SEED = 0
@@ -101,11 +106,14 @@ def main() -> None:
     repo = Path(__file__).resolve().parent.parent
     # Join GDSC2 <-> Soragni on PubChem CID: their native drug ids share no
     # namespace (Soragni uses drug names, GDSC2 numeric DRUG_IDs).
+    # CPM-normalize both cohorts (length-free, per-million) so train and test
+    # share one normalization -- the native loaders otherwise leave GDSC2 on
+    # median-of-ratios and Soragni on CPM.
     xs, ds = build_sample_design(
-        load_tranche("sarcoma", repo), "organoid", "viability", drug_key="pubchem_cid"
+        cpm_bundle(load_tranche("sarcoma", repo)), "organoid", "viability", drug_key="pubchem_cid"
     )
     ctf = None if args.pan_cancer else GDSC_SARCOMA
-    gd = load_tranche("gdscv2", repo, cancer_type_filter=ctf)
+    gd = cpm_bundle(load_tranche("gdscv2", repo, cancer_type_filter=ctf))
     xg, dg = build_sample_design(gd, "all", "auc", drug_key="pubchem_cid")
 
     shared = sorted(set(ds["drug"].astype(str)) & set(dg["drug"].astype(str)))
@@ -113,25 +121,31 @@ def main() -> None:
     dg = dg[dg["drug"].astype(str).isin(shared)].copy()
     print(f"shared drugs {len(shared)} | gdsc rows {len(dg)} | soragni rows {len(ds)}")
 
+    # Per-drug head only (a shared slope carries no interaction). Expression is
+    # log1p(CPM) -- non-negative, so reducible by PCA or NMF; Stack embeddings can
+    # be negative, so PCA only.
     genes = sorted(set(xs.columns) & set(xg.columns))
-    reps: dict[str, tuple] = {"expr": (np.log1p(xg[genes]), np.log1p(xs[genes]))}
+    ex_g, ex_s = np.log1p(xg[genes]), np.log1p(xs[genes])
+    runs = [("expr/pca", ex_g, ex_s, "pca"), ("expr/nmf", ex_g, ex_s, "nmf")]
     if args.stack_gdsc and args.stack_soragni:
         eg = pd.read_csv(args.stack_gdsc, index_col=0)
         es = pd.read_csv(args.stack_soragni, index_col=0)
         eg.index, es.index = eg.index.astype(str), es.index.astype(str)
-        reps["stack"] = (eg, es)
+        runs.append(("stack/pca", eg, es, "pca"))
 
-    hdr = f"{'rep/head':18s}{'global_sp':>10}{'global_pe':>10}{'within':>9}{'interact':>10}{'p':>8}"
-    print(f"\n=== GDSC2 -> Soragni transfer (frozen) ===\n{hdr}")
-    for rep, (fg, fs) in reps.items():
-        for head, kw in (("shared", {}), ("per_drug", {"per_drug": True})):
-            factory = partial(
-                SimpleProbe, n_components=args.n_components, std_floor=args.std_floor, **kw
-            )
-            preds = transfer_predict(factory, fg, dg, fs, ds)
-            gs, gp, wd, it, pv = score(preds, args.n_permutations)
-            label = f"{rep}/{head}"
-            print(f"{label:18s}{gs:>+10.3f}{gp:>+10.3f}{wd:>+9.3f}{it:>+10.3f}{pv:>8.3f}")
+    hdr = f"{'rep':18s}{'global_sp':>10}{'global_pe':>10}{'within':>9}{'interact':>10}{'p':>8}"
+    print(f"\n=== GDSC2 -> Soragni transfer (frozen, log1p CPM) ===\n{hdr}")
+    for label, fg, fs, reducer in runs:
+        factory = partial(
+            SimpleProbe,
+            n_components=args.n_components,
+            std_floor=args.std_floor,
+            per_drug=True,
+            reducer=reducer,
+        )
+        preds = transfer_predict(factory, fg, dg, fs, ds)
+        gs, gp, wd, it, pv = score(preds, args.n_permutations)
+        print(f"{label:18s}{gs:>+10.3f}{gp:>+10.3f}{wd:>+9.3f}{it:>+10.3f}{pv:>8.3f}")
 
 
 if __name__ == "__main__":

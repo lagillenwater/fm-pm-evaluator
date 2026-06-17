@@ -43,7 +43,6 @@ Alpine recipe (GPU node; `pip install arc-stack` first):
 from __future__ import annotations
 
 import argparse
-import dataclasses
 from pathlib import Path
 
 import anndata as ad
@@ -51,25 +50,7 @@ import numpy as np
 import pandas as pd
 
 from fmharness.data.loaders import load_tranche
-from fmharness.evaluation import build_sample_design
-
-
-def _cpm_bundle(bundle):
-    """Return a copy of ``bundle`` whose expression X is per-million (CPM).
-
-    Prefers the raw integer counts when present (GDSC2 keeps them in
-    ``layers['raw_counts']``); otherwise the X is already count-derived and
-    length-free (Soragni CPM) and is simply re-normalized to per-million over
-    measured genes. CPM is library-size-normalized but NOT gene-length-normalized
-    -- the representation Stack's count model expects.
-    """
-    expr = bundle.expression.copy()
-    m = expr.layers.get("raw_counts", expr.X)
-    m = np.asarray(m, dtype=np.float64)
-    lib = m.sum(axis=1, keepdims=True)
-    lib[lib == 0] = 1.0
-    expr.X = m / lib * 1e6
-    return dataclasses.replace(bundle, expression=expr)
+from fmharness.evaluation import build_sample_design, cpm_bundle
 
 
 def main() -> None:
@@ -91,7 +72,7 @@ def main() -> None:
     gmap = pd.read_csv(repo / "data/static/stack_soragni_gene_map.csv")
     # A non-None cancer_type_filter signals the gdscv2 loader to restrict to sarcoma.
     ctf = ["sarcoma"] if args.sarcoma_only else None
-    bundle = _cpm_bundle(load_tranche(args.dataset, repo, cancer_type_filter=ctf))
+    bundle = cpm_bundle(load_tranche(args.dataset, repo, cancer_type_filter=ctf))
     # metric is irrelevant here (we keep only the expression frame); pass the
     # cohort's real metric so build_sample_design does not warn on an empty design.
     metric = "viability" if args.dataset in ("sarcoma", "soragni") else "auc"

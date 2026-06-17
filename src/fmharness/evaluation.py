@@ -7,6 +7,7 @@ by the controls so they share one code path.
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Callable
 
 import numpy as np
@@ -17,6 +18,24 @@ from sklearn.model_selection import GroupKFold
 from fmharness.data.loaders import CoderDataBundle
 
 _MODEL_TYPE = {"organoid": "patient derived organoid", "tumor": "tumor"}
+
+
+def cpm_bundle(bundle: CoderDataBundle) -> CoderDataBundle:
+    """Return a copy of ``bundle`` with expression X as per-million (CPM).
+
+    Prefers raw integer counts when present (GDSC2 keeps them in
+    ``layers['raw_counts']``); otherwise X is already count-derived and
+    length-free (Soragni CPM) and is renormalized to per-million. This puts
+    GDSC2 and Soragni on one shared, length-free normalization -- required for a
+    fair cross-substrate comparison, since the native loaders otherwise leave
+    GDSC2 on DESeq2 median-of-ratios and Soragni on CPM.
+    """
+    expr = bundle.expression.copy()
+    m = np.asarray(expr.layers.get("raw_counts", expr.X), dtype=np.float64)
+    lib = m.sum(axis=1, keepdims=True)
+    lib[lib == 0] = 1.0
+    expr.X = m / lib * 1e6
+    return dataclasses.replace(bundle, expression=expr)
 
 
 def build_sample_design(
