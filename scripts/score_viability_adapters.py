@@ -81,7 +81,7 @@ def main() -> None:
         else None
     )
 
-    # target: Stack-generated Soragni deltas + real Soragni AUC
+    # target: Stack-generated Soragni deltas + real Soragni Viability_Score
     _, design = build_sample_design(load_tranche("sarcoma", repo), "organoid", "viability")
     base_path = Path(args.baseline) if Path(args.baseline).is_absolute() else repo / args.baseline
     tgt_delta, tgt_key = build_generated_deltas(
