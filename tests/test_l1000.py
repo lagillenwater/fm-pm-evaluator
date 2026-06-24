@@ -8,7 +8,13 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 
-from fmharness.l1000 import build_generated_deltas, drug_pert_maps, logcpm
+from fmharness.l1000 import (
+    build_additive_deltas,
+    build_generated_deltas,
+    build_learned_deltas,
+    drug_pert_maps,
+    logcpm,
+)
 
 
 def test_logcpm_is_scale_invariant() -> None:
@@ -65,3 +71,61 @@ def test_build_generated_deltas(tmp_path: Path) -> None:
     assert delta.shape == (2, 3)  # only BRD-1's 2 organoids
     assert list(key["drug"].unique()) == ["D1"]  # BRD-X skipped
     assert float(delta.loc[delta.index[0], "A"]) == 2.0  # 12 - 10 for o1
+
+
+def test_build_additive_deltas_is_drug_mean_per_organoid() -> None:
+    # two drugs over cell lines L1/L2; the additive delta is each drug's mean over its
+    # lines, assigned identically to every organoid (no organoid x drug interaction).
+    genes = ["A", "B"]
+    l1000_delta = pd.DataFrame(
+        [[2.0, 4.0], [4.0, 8.0], [1.0, 1.0], [3.0, 3.0]], columns=pd.Index(genes)
+    )
+    l1000_key = pd.DataFrame(
+        {"patient": ["L1", "L2", "L1", "L2"], "drug": ["d1", "d1", "d2", "d2"]}
+    )
+    delta, key = build_additive_deltas(l1000_delta, l1000_key, ["o1", "o2", "o3"])
+
+    assert list(delta.columns) == genes
+    assert delta.shape == (2 * 3, 2)  # 2 drugs x 3 organoids
+    # every organoid gets d1's mean delta [3, 6] and d2's mean delta [2, 2]
+    for drug, want in (("d1", [3.0, 6.0]), ("d2", [2.0, 2.0])):
+        rows = delta[key["drug"].to_numpy() == drug].to_numpy()
+        assert rows.shape == (3, 2)
+        assert np.allclose(rows, want)  # organoid-independent
+    assert set(key["patient"]) == {"o1", "o2", "o3"}
+
+
+def test_build_learned_deltas_is_drug_mean_plus_organoid_correction() -> None:
+    # learned predictor: delta(organoid, drug) = drug_mean[drug] + correction(organoid).
+    # The correction is drug-independent, so within an organoid the difference between
+    # two drugs' predicted deltas equals the difference of their drug means -- exactly,
+    # regardless of the fitted ridge. And different organoids get different deltas.
+    genes = pd.Index(["A", "B", "C", "D"])
+    rng = np.random.default_rng(0)
+    cells = [f"L{i}" for i in range(6)]
+    train_base = pd.DataFrame(rng.random((6, 4)) + 0.5, index=pd.Index(cells), columns=genes)
+    keys = [(c, d) for d in ("d1", "d2") for c in cells]
+    train_key = pd.DataFrame(keys, columns=pd.Index(["patient", "drug"]))
+    dmean = {"d1": np.array([1.0, 2.0, 3.0, 4.0]), "d2": np.array([-1.0, 0.0, 1.0, 2.0])}
+    base_arr = train_base.loc[[p for p, _ in keys]].to_numpy()
+    delta_rows = [dmean[d] + 0.1 * base_arr[i] for i, (_, d) in enumerate(keys)]
+    train_delta = pd.DataFrame(np.asarray(delta_rows), columns=genes)
+    target_base = pd.DataFrame(
+        rng.random((3, 4)) + 0.5, index=pd.Index(["o1", "o2", "o3"]), columns=genes
+    )
+
+    delta, key = build_learned_deltas(
+        train_base, train_delta, train_key, target_base, ["o1", "o2", "o3"], reducer="pca", k=3
+    )
+    assert delta.shape == (2 * 3, 4)  # 2 drugs x 3 organoids
+    assert list(delta.columns) == list(genes)
+
+    want_diff = dmean["d1"] - dmean["d2"]
+    for p in ("o1", "o2", "o3"):
+        d1 = delta[(key["patient"] == p) & (key["drug"] == "d1")].to_numpy()[0]
+        d2 = delta[(key["patient"] == p) & (key["drug"] == "d2")].to_numpy()[0]
+        assert np.allclose(d1 - d2, want_diff)  # correction cancels -> drug-mean difference
+    # organoid-specific: o1 and o2 do not get identical predicted deltas
+    o1 = delta[(key["patient"] == "o1") & (key["drug"] == "d1")].to_numpy()[0]
+    o2 = delta[(key["patient"] == "o2") & (key["drug"] == "d1")].to_numpy()[0]
+    assert not np.allclose(o1, o2)

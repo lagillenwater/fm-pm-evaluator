@@ -197,3 +197,28 @@ def interaction_rho(preds: pd.DataFrame, pred_col: str = "y_resid", min_n: int =
 
 def global_spearman(preds: pd.DataFrame) -> float:
     return float(np.asarray(spearmanr(preds["y_true"], preds["y_pred"]))[0])
+
+
+def regret_norm_at_k(preds: pd.DataFrame, ks: tuple[int, ...] = (1, 3, 5)) -> dict[int, float]:
+    """Mean normalized regret@k over patients (lower is better; 0 is best).
+
+    ``y_true`` / ``y_pred`` are AUC-like, so a lower value is a more sensitive (better)
+    drug. For each patient the drugs are ranked by ascending ``y_pred`` (predicted best
+    first); for the top-k picks, regret is the gap between the best *observed* response
+    among them and the patient's actual best, normalized by that patient's observed
+    spread so it is panel-size invariant. 0 means the top-k shortlist already contains
+    the patient's best drug. Patients with fewer than 2 drugs or no spread are skipped.
+    """
+    acc: dict[int, list[float]] = {k: [] for k in ks}
+    for _, g in preds.groupby("patient"):
+        yt = g["y_true"].to_numpy(dtype=np.float64)
+        yp = g["y_pred"].to_numpy(dtype=np.float64)
+        rng = float(yt.max() - yt.min())
+        if len(yt) < 2 or rng <= 0.0:
+            continue
+        order = np.argsort(yp, kind="stable")  # predicted best (lowest AUC) first
+        best = float(yt.min())
+        for k in ks:
+            topk = order[:k]
+            acc[k].append((float(yt[topk].min()) - best) / rng)
+    return {k: (float(np.mean(v)) if v else float("nan")) for k, v in acc.items()}
