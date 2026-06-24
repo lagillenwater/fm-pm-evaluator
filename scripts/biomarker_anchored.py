@@ -76,10 +76,15 @@ def _wes_alterations(repo: Path) -> tuple[dict[str, dict[str, set[str]]], set[st
     cnv = pd.read_parquet(repo / "data/raw/soragni/tables/cnv.parquet")
     snv = snv[snv["BestEffect_Variant_Classification"].astype(str) != "intron"]
     alt: dict[str, dict[str, set[str]]] = {"mut": {}, "amp": {}, "del": {}}
-    for gene, sid in zip(snv["BestEffect_Hugo_Symbol"].astype(str), snv["Sample_ID"].astype(str)):
+    for gene, sid in zip(
+        snv["BestEffect_Hugo_Symbol"].astype(str), snv["Sample_ID"].astype(str), strict=True
+    ):
         alt["mut"].setdefault(gene, set()).add(canonicalize_patient_id(sid))
     for gene, sid, call in zip(
-        cnv["Gene"].astype(str), cnv["Sample_ID"].astype(str), cnv["Pathologist_Call"].astype(str)
+        cnv["Gene"].astype(str),
+        cnv["Sample_ID"].astype(str),
+        cnv["Pathologist_Call"].astype(str),
+        strict=True,
     ):
         p = canonicalize_patient_id(sid)
         if call == "Amplification":
@@ -142,9 +147,7 @@ def main() -> None:
         # prior (want_sign is the expected sign of rho(biomarker, viability)).
         y_pred = want_sign * bv
         bm_preds.append(
-            pd.DataFrame(
-                {"patient": common, "drug": bm["drug"], "y_true": yv, "y_pred": y_pred}
-            )
+            pd.DataFrame({"patient": common, "drug": bm["drug"], "y_true": yv, "y_pred": y_pred})
         )
 
         # per-patient actionability for genomic positives: where does the matched drug
@@ -174,7 +177,8 @@ def main() -> None:
     print("  sensitivity_pctile = fraction of this organoid's drugs MORE potent than the")
     print("  matched drug (0.0 = the matched drug is its single most effective).")
     act = pd.DataFrame(actionable)
-    print(act.to_string(index=False) if not act.empty else "  (no genomic-positive organoids with a matched-drug response)")
+    empty_msg = "  (no genomic-positive organoids with a matched-drug response)"
+    print(act.to_string(index=False) if not act.empty else empty_msg)
 
     # ---- head-to-head: single biomarker vs global PCA-of-expression (within Soragni) ----
     bm_all = pd.concat(bm_preds, ignore_index=True) if bm_preds else pd.DataFrame()
