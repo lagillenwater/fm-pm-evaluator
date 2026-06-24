@@ -78,7 +78,7 @@ def drug_pert_maps(
     ikb2p = {str(k): p for k, p in zip(cp["inchi_key_prefix"], cp["pert_id"], strict=True)}
     drug2pert: dict[str, str] = {}
     pert2drug: dict[str, str] = {}
-    for _, r in drugs.drop_duplicates("improve_drug_id").iterrows():
+    for _, r in drugs.drop_duplicates(subset=["pubchem_id", "InChIKey"]).iterrows():
         try:
             cid = str(int(r["pubchem_id"]))  # skips None / NaN (no canonical CID)
         except (TypeError, ValueError):
