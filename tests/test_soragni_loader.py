@@ -278,7 +278,7 @@ def test_drug_assays_attached_to_organoid(tmp_path: Path) -> None:
     _build_fixture(tmp_path)
     bundle = load_soragni(tmp_path)
 
-    # 5 drug-screen rows in fixture; 4 in the matched cohort (sarc0099 excluded)
+    # 6 drug-screen rows in fixture; 5 in the matched cohort (sarc0099 excluded)
     assert len(bundle.drug_assays) == 5
     # All assays attach to an Organoid sample, never a Tumor sample
     for a in bundle.drug_assays:
