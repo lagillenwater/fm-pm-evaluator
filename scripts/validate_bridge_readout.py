@@ -49,7 +49,7 @@ def main() -> None:
         if args.signatures == "hallmark"
         else None
     )
-    delta, key, dg = build_l1000_gdsc_pairs(
+    delta, key, dg, _ = build_l1000_gdsc_pairs(
         repo,
         Path(args.l1000_dir),
         args.gctx,

@@ -1,10 +1,19 @@
-"""Compare viability adapters on Stack-generated deltas, against the Soragni AUC target.
+"""Compare delta sources x viability adapters against the Soragni AUC target.
 
-The supervised adapters (szalai, xgboost) are fit on real L1000 treated-minus-DMSO
-deltas vs GDSC2 AUC; the unsupervised one (hallmark) needs no fit. Each is applied to
-Stack's generated Soragni deltas and scored against the real Soragni AUC with the same
-global / interaction rho + within-drug label-permutation null. ``--methods`` selects the
-adapters (default: all three). Run on Alpine (needs the L1000 .gctx for the training cohort).
+The generation axis must be fair: the readout adapters (szalai/xgboost supervised on
+real L1000 deltas vs GDSC2 AUC; hallmark unsupervised) are applied to EVERY delta
+source, not just Stack's. Sources:
+
+  - ``additive`` (always): each drug's mean real L1000 delta, applied to every organoid
+    (organoid-independent) -- the generation analogue of the drug-mean baseline. The
+    floor Stack must beat: it carries the drug main effect but no organoid x drug
+    interaction.
+  - ``stack`` (when --generated-dir is given): Stack-generated organoid-specific deltas.
+
+Every (source, adapter) cell is scored against the real Soragni AUC with the same
+global / interaction rho + within-drug label-permutation null, so Stack's generated
+delta is compared head-to-head against the additive baseline under each readout.
+Run on Alpine (needs the L1000 .gctx for the training cohort and additive source).
 
   PYTHONPATH=src python scripts/score_viability_adapters.py --l1000-dir . \\
       --gctx GSE92742_Broad_LINCS_Level3_INF_mlr12k_n1319138x12328.gctx \\
@@ -16,21 +25,33 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+import anndata as ad
 import numpy as np
 import pandas as pd
 
 from fmharness.adapters import ALL_METHODS, build_adapters
 from fmharness.controls import permute_within_drug
 from fmharness.data.loaders import load_tranche
-from fmharness.evaluation import build_sample_design, global_spearman, interaction_rho
-from fmharness.l1000 import build_generated_deltas, build_l1000_gdsc_pairs, soragni_pert_map
+from fmharness.evaluation import (
+    build_sample_design,
+    global_spearman,
+    interaction_rho,
+    regret_norm_at_k,
+)
+from fmharness.l1000 import (
+    build_additive_deltas,
+    build_generated_deltas,
+    build_l1000_gdsc_pairs,
+    build_learned_deltas,
+    soragni_pert_map,
+)
 from fmharness.signatures import load_hallmark
 
 SEED = 0
 
 
-def _score(preds: pd.DataFrame, n_perm: int) -> tuple[float, float, float]:
-    """global rho, interaction rho, within-drug label-permutation p (vs interaction)."""
+def _score(preds: pd.DataFrame, n_perm: int) -> tuple[float, float, float, dict[int, float]]:
+    """global rho, interaction rho, within-drug label-permutation p, regret@k dict."""
     gl = global_spearman(preds)
     it = interaction_rho(preds, "y_pred")
     null = np.array(
@@ -46,14 +67,30 @@ def _score(preds: pd.DataFrame, n_perm: int) -> tuple[float, float, float]:
             for b in range(n_perm)
         ]
     )
-    return gl, it, float(np.mean(null >= it))
+    return gl, it, float(np.mean(null >= it)), regret_norm_at_k(preds)
+
+
+def _read_baseline(path: Path) -> pd.DataFrame:
+    """Soragni baseline AnnData -> DataFrame (organoid x gene symbol)."""
+    a = ad.read_h5ad(path)
+    x = a.X
+    x = x.toarray() if hasattr(x, "toarray") else np.asarray(x)
+    return pd.DataFrame(
+        np.asarray(x, dtype=np.float64),
+        index=pd.Index([str(o) for o in a.obs_names]),
+        columns=pd.Index([str(g) for g in a.var_names]),
+    )
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--l1000-dir", default=".")
     ap.add_argument("--gctx", required=True)
-    ap.add_argument("--generated-dir", required=True)
+    ap.add_argument(
+        "--generated-dir",
+        default=None,
+        help="Stack-generated per-drug .h5ad dir; omit to score the additive baseline only",
+    )
     ap.add_argument("--baseline", default="data/reference/stack_input_soragni.h5ad")
     ap.add_argument(
         "--methods",
@@ -81,15 +118,12 @@ def main() -> None:
         else None
     )
 
-    # target: Stack-generated Soragni deltas + real Soragni Viability_Score
     _, design = build_sample_design(load_tranche("sarcoma", repo), "organoid", "viability")
-    base_path = Path(args.baseline) if Path(args.baseline).is_absolute() else repo / args.baseline
-    tgt_delta, tgt_key = build_generated_deltas(
-        Path(args.generated_dir), base_path, soragni_pert_map(repo)
-    )
 
-    # train cohort: real L1000 deltas -> GDSC2 AUC (for the supervised adapters)
-    tr_delta, tr_key, dg = build_l1000_gdsc_pairs(
+    # train cohort: real L1000 deltas -> GDSC2 AUC (for the supervised adapters and the
+    # additive baseline). Keep the full delta for the additive per-drug mean; fit the
+    # supervised adapters on the subset that has a GDSC2 AUC label.
+    tr_delta, tr_key, dg, tr_base = build_l1000_gdsc_pairs(
         repo,
         Path(args.l1000_dir),
         args.gctx,
@@ -98,52 +132,76 @@ def main() -> None:
         treated_cap=args.treated_cap,
         dmso_cap=args.dmso_cap,
     )
-    tr_via = tr_key.merge(dg.rename(columns={"y": "_y"}), on=["patient", "drug"], how="left")[
+    tr_via_all = tr_key.merge(dg.rename(columns={"y": "_y"}), on=["patient", "drug"], how="left")[
         "_y"
     ].to_numpy()
-    ok = ~np.isnan(tr_via)
-    tr_delta, tr_via = tr_delta[ok], tr_via[ok]
+    ok = ~np.isnan(tr_via_all)
+    tr_delta_fit, tr_via = tr_delta[ok], tr_via_all[ok]
 
-    common = tr_delta.columns.intersection(tgt_delta.columns)
-    tr_x, tgt_x = tr_delta[common], tgt_delta[common]
-    print(
-        f"train {len(tr_x)} pairs | target {len(tgt_x)} pairs | {len(common)} shared genes "
-        f"| methods {methods}"
-    )
+    # delta sources, fed through the SAME readout adapters:
+    #   additive  -- drug-mean L1000 delta (organoid-independent floor)
+    #   pca / nmf -- learned organoid-specific delta predictors (need the Soragni baseline)
+    #   stack     -- Stack-generated organoid-specific delta (when --generated-dir given)
+    patients = sorted(str(p) for p in design["patient"].unique())
+    base_path = Path(args.baseline) if Path(args.baseline).is_absolute() else repo / args.baseline
+    sources: dict[str, tuple[pd.DataFrame, pd.DataFrame]] = {
+        "additive": build_additive_deltas(tr_delta, tr_key, patients)
+    }
+    if base_path.exists():
+        soragni_base = _read_baseline(base_path)
+        for reducer in ("pca", "nmf"):
+            sources[reducer] = build_learned_deltas(
+                tr_base, tr_delta, tr_key, soragni_base, patients, reducer=reducer
+            )
+    else:
+        print(f"(skipping pca/nmf sources: baseline {base_path} not found)")
+    if args.generated_dir:
+        sources["stack"] = build_generated_deltas(
+            Path(args.generated_dir), base_path, soragni_pert_map(repo)
+        )
 
     out: list[dict[str, object]] = []
-    for adapter in build_adapters(methods, signatures=sigs):
-        if adapter.supervised:
-            adapter.fit(tr_x, tr_via)
-        sens = adapter.predict(tgt_x)
-        merged = pd.DataFrame(
-            {
-                "patient": tgt_key["patient"].to_numpy(),
-                "drug": tgt_key["drug"].to_numpy(),
-                "_sens": sens,
-            }
-        ).merge(design.rename(columns={"y": "y_true"}), on=["patient", "drug"], how="inner")
-        preds = pd.DataFrame(
-            {
-                "patient": merged["patient"],
-                "drug": merged["drug"],
-                "y_true": merged["y_true"].to_numpy(),
-                "y_pred": -merged["_sens"].to_numpy(),
-            }
+    for src_name, (sdelta, skey) in sources.items():
+        common = tr_delta_fit.columns.intersection(sdelta.columns)
+        tr_x, sx = tr_delta_fit[common], sdelta[common]
+        print(
+            f"[{src_name}] train {len(tr_x)} pairs | source {len(sx)} pairs | "
+            f"{len(common)} shared genes | methods {methods}"
         )
-        gl, it, pv = _score(preds, args.n_permutations)
-        out.append(
-            {
-                "method": adapter.name,
-                "global": round(gl, 3),
-                "interaction": round(it, 3),
-                "p_label": round(pv, 3),
-                "n": len(preds),
-                "citation": adapter.citation,
-            }
-        )
+        for adapter in build_adapters(methods, signatures=sigs):
+            if adapter.supervised:
+                adapter.fit(tr_x, tr_via)
+            sens = adapter.predict(sx)
+            merged = pd.DataFrame(
+                {
+                    "patient": skey["patient"].to_numpy(),
+                    "drug": skey["drug"].to_numpy(),
+                    "_sens": sens,
+                }
+            ).merge(design.rename(columns={"y": "y_true"}), on=["patient", "drug"], how="inner")
+            preds = pd.DataFrame(
+                {
+                    "patient": merged["patient"],
+                    "drug": merged["drug"],
+                    "y_true": merged["y_true"].to_numpy(),
+                    "y_pred": -merged["_sens"].to_numpy(),
+                }
+            )
+            gl, it, pv, regret = _score(preds, args.n_permutations)
+            out.append(
+                {
+                    "source": src_name,
+                    "method": adapter.name,
+                    "global": round(gl, 3),
+                    "interaction": round(it, 3),
+                    "p_label": round(pv, 3),
+                    "regret@1": round(regret.get(1, float("nan")), 3),
+                    "regret@3": round(regret.get(3, float("nan")), 3),
+                    "n": len(preds),
+                }
+            )
 
-    print("\n=== viability adapters: Stack-generated deltas vs Soragni AUC ===")
+    print("\n=== delta source x viability adapter vs Soragni AUC ===")
     print(pd.DataFrame(out).to_string(index=False))
 
 
