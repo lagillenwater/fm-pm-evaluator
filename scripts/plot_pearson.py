@@ -19,11 +19,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-import matplotlib
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import numpy as np
+from _plotting import plt, savefig
 from scipy.stats import pearsonr, spearmanr
 
 from fmharness.data.loaders import load_tranche
@@ -99,11 +96,7 @@ def main() -> None:
         y=1.02,
     )
     fig.tight_layout()
-
-    out = repo / "results" / f"pearson_scatter_{args.n_splits}fold.png"
-    out.parent.mkdir(exist_ok=True)
-    fig.savefig(out, dpi=150, bbox_inches="tight")
-    print(f"\nwrote {out}")
+    savefig(fig, repo / "results" / f"pearson_scatter_{args.n_splits}fold.png")
 
 
 if __name__ == "__main__":

@@ -29,6 +29,9 @@ ml = [
     "torch>=2.2",
     "transformers>=4.40",
 ]
+viz = [
+    "matplotlib>=3.8",
+]
 stack = [
     "arc-stack @ git+https://github.com/ArcInstitute/stack.git",
 ]

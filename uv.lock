@@ -746,6 +746,9 @@ ml = [
 stack = [
     { name = "arc-stack" },
 ]
+viz = [
+    { name = "matplotlib" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -754,6 +757,7 @@ requires-dist = [
     { name = "coderdata", specifier = ">=2.2.1" },
     { name = "hypothesis", marker = "extra == 'dev'", specifier = ">=6.100" },
     { name = "joblib", specifier = ">=1.4" },
+    { name = "matplotlib", marker = "extra == 'viz'", specifier = ">=3.8" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "openpyxl", specifier = ">=3.1" },
     { name = "pandas", specifier = ">=2.2" },
@@ -774,7 +778,7 @@ requires-dist = [
     { name = "typer", specifier = ">=0.12" },
     { name = "xgboost", specifier = ">=3.2.0" },
 ]
-provides-extras = ["ml", "stack", "dev"]
+provides-extras = ["ml", "viz", "stack", "dev"]
 
 [[package]]
 name = "fonttools"

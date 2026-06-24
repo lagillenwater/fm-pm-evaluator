@@ -24,11 +24,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-import matplotlib
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import numpy as np
+from _plotting import plt, savefig
 from scipy.stats import spearmanr
 
 from fmharness.data.loaders import load_tranche
@@ -83,11 +80,7 @@ def main() -> None:
         y=1.03,
     )
     fig.tight_layout()
-
-    out = repo / "results" / f"global_rho_scatter_{args.n_splits}fold.png"
-    out.parent.mkdir(exist_ok=True)
-    fig.savefig(out, dpi=150, bbox_inches="tight")
-    print(f"wrote {out}")
+    savefig(fig, repo / "results" / f"global_rho_scatter_{args.n_splits}fold.png")
 
 
 if __name__ == "__main__":
