@@ -1,8 +1,8 @@
 # fm-pdo-evaluator
 
-Foundation-model evaluation harness for patient-derived tumor organoid (PDTO) drug-response prediction. Realizing the benefits of foundation models requires careful evaluations that map the boundaries of generalization.
+Foundation-model evaluation harness for patient-derived tumor organoid (PDTO) drug-response prediction. Realizing the benefits of foundation models requires careful evaluations that map the boundaries of generalization — and that test a model in the mode it was actually designed for.
 
-The harness trains a fixed downstream head on cell-line drug screens (GDSC2) and tests it, frozen, on sarcoma organoids (Soragni 2024), comparing foundation-model embeddings (Stack) against simple expression baselines under negative and positive controls. It is the companion code for *Prospective Evaluation of Foundation Model Performance in Precision Medicine* (greenelab/fm-pm-eval-manuscript).
+This harness evaluates the Stack single-cell foundation model in its native **prompt→query** mode: given a context of drug-treated cells (the prompt) and a tumor organoid's baseline transcriptome (the query), Stack-Aligned generates the organoid's drug-treated state, which a transcriptional readout turns into a viability prediction. Crucially, that readout is applied to **every delta source on equal footing**, so Stack's generated response is compared head-to-head against a simple non-foundation-model baseline rather than scored in isolation. Companion code for *Prospective Evaluation of Foundation Model Performance in Precision Medicine* (greenelab/fm-pm-eval-manuscript).
 
 ## Quickstart
 
@@ -19,34 +19,49 @@ uv run pytest
 
 ## Evaluation design
 
-A model is scored as a **representation** (PCA/NMF of expression, or a Stack embedding) fed to a swappable **head** (linear ridge or RBF kernel ridge). The head is trained on GDSC2 cell lines and frozen, then asked to predict held-out Soragni organoids. Negative (within-drug permutation) and positive (planted interaction) controls bracket every result. See [docs/models.md](docs/models.md) for each model and [docs/adapter_contract.md](docs/adapter_contract.md) for the encoder interface.
+The prediction target is Soragni sarcoma organoid drug response (viability). Stack is run in its generative in-context mode: a perturbation context of drug-treated cells plus the organoid baseline → a predicted treated transcriptome → a viability readout. Because that context needs drug-*treated* transcriptomes, **L1000** (LINCS) is the perturbation source — cell-line drug screens like GDSC2 have only baseline expression and a scalar AUC, so they cannot form the prompt; GDSC2 instead supplies the viability labels that train the supervised readouts.
+
+The fairness principle: the readout adapters are applied to **every** delta source, not only Stack's. The non-foundation-model baselines span the spectrum of organoid specificity — an **additive baseline** (each drug's mean real L1000 delta, applied to every organoid; no organoid×drug interaction by construction) and **PCA/NMF learned predictors** (a linear baseline→delta map fit on real L1000, giving an organoid-specific correction). Stack only earns its keep if its generated delta beats these on the same readouts and metrics.
 
 ```mermaid
 flowchart LR
-    G[GDSC2 sarcoma<br/>cell lines] --> R
-    S[Soragni PDTOs<br/>organoids] --> R
-    subgraph R[Representation]
-        E[log1p CPM<br/>expression PCA/NMF]
-        K[Stack-Large<br/>embedding]
-    end
-    R --> H
-    subgraph H[Head]
-        L[linear ridge<br/>SimpleProbe]
-        N[RBF kernel ridge<br/>KernelProbe]
-        B[bilinear<br/>z, g, z⊗g]
-    end
-    H --> T[train on GDSC2,<br/>predict frozen on Soragni]
-    T --> M[metrics:<br/>interaction rho,<br/>within-drug rho,<br/>regret@k]
+    L[L1000 drug-treated<br/>profiles] --> GEN[Stack-Aligned generation:<br/>organoid-specific delta]
+    SB[Soragni baseline<br/>query organoids] --> GEN
+    L --> ADD[additive baseline:<br/>drug-mean delta]
+    L --> LRN[PCA / NMF predictors:<br/>learned organoid-specific delta]
+    SB --> LRN
+    GEN --> RO[readout adapters<br/>hallmark / szalai / xgboost:<br/>delta to viability]
+    ADD --> RO
+    LRN --> RO
+    RO --> M[metrics:<br/>global / interaction / within-drug rho,<br/>regret@k]
     M --> C{controls}
-    C --> NEG[negative:<br/>within-drug permutation]
-    C --> POS[positive:<br/>planted interaction]
+    C --> NEG[negative:<br/>within-drug permutation null]
+    C --> POS[validation:<br/>readout gate on real L1000]
 ```
+
+See [docs/models.md](docs/models.md) for each model and [docs/adapter_contract.md](docs/adapter_contract.md) for the model interface.
+
+### Data transformations
+
+- **Expression → per-million.** GDSC2 (DepMap raw RSEM counts → pydeseq2 median-of-ratios in the loader, raw counts retained) and Soragni (deposited per-million matrix, Synapse `syn64333318`) are both put on one length-free counts-per-million scale by `cpm_bundle` ([src/fmharness/evaluation.py](src/fmharness/evaluation.py)). This matters because Stack is a count model; the earlier CoderData layer mixed TPM and CPM across cohorts, which confounds it.
+- **Stack input.** Each sample's per-million expression over a fixed ~12.8k-gene high-variance panel (`data/static/stack_hvg_genes.txt`, mapped via `stack_soragni_gene_map.csv`) is sent to Stack as a pseudo-cell; Stack applies `log1p` + a negative-binomial decoder internally.
+- **Deltas.** A treated−control difference is taken in log-CPM (`logcpm`), so it is a log fold-change rather than a depth-dominated count difference. Real L1000 deltas are treated minus DMSO group means; the additive baseline is each drug's mean over those; Stack's delta is generated-treated minus the organoid baseline. All builders live in [src/fmharness/l1000.py](src/fmharness/l1000.py).
+
+### Models
+
+| Layer | Options |
+|---|---|
+| **Delta source** (predict the treated transcriptome) | Stack-Aligned generation (organoid-specific); PCA/NMF learned predictors (organoid-specific, linear baseline→delta map on L1000); additive drug-mean baseline (organoid-independent floor) |
+| **Readout adapter** (delta → viability) | `hallmark` (unsupervised death/proliferation signature), `szalai` (L2 linear), `xgboost` (elastic-net selection + boosted trees) — supervised readouts fit on real L1000 deltas vs GDSC2 AUC |
+| **Metrics** | global / within-drug / interaction Spearman; normalized regret@k; within-drug permutation null |
+
+Every model implements one `ModelAdapter` ([src/fmharness/models/adapter.py](src/fmharness/models/adapter.py)) so splits, metrics, and controls stay model-agnostic. Operational detail per model is in [docs/models.md](docs/models.md).
 
 ## Datasets
 
-- **Soragni 2024** sarcoma PDTOs ([Synapse PDTOSarcoma](https://www.synapse.org/PDTOSarcoma)) — 17 matched organoids, 21 drugs shared with GDSC2 by PubChem CID
-- **GDSC2** sarcoma cell lines (DepMap RNA-seq + GDSC2 screen) — 28 lines, the powered training cohort
-- **Yang 2024** primary liver cancer PDOs ([Cancer Cell](https://www.cell.com/cancer-cell/fulltext/S1535-6108(24)00089-8)) — deferred to v2
+- **Soragni 2024** sarcoma PDTOs ([Synapse PDTOSarcoma](https://www.synapse.org/PDTOSarcoma)) — 17 matched organoids; the query cells and the viability ground truth
+- **L1000** (LINCS GSE92742) — drug-treated + DMSO bulk profiles; the perturbation context (prompt) and the readout-validation cohort
+- **GDSC2** sarcoma cell lines (DepMap RNA-seq + GDSC2 screen) — the viability labels that train the supervised readouts
 
 The cohorts and the shared drug panel (the raw inputs, no model):
 
@@ -59,33 +74,18 @@ Regenerate with `uv run python scripts/plot_data.py`.
 
 ## Results
 
-**A Stack-Large embedding gives no advantage over PCA of expression for sarcoma drug response.** In-distribution (within GDSC2 sarcoma), the embedding signal beyond the drug mean is, if anything, weaker than expression PCA (interaction rho: expression 0.224 > Stack 0.199 > subtype 0.138). Out of distribution (GDSC2 → Soragni, frozen), the transcriptome models collapse toward the drug-mean prior, and the predictive signal lives in the functional organoid screens rather than the transcriptome. Positive controls confirm each apparatus has full power when signal is planted in its own representation, so the null is biological, not a dead pipeline.
+Every (delta source × readout adapter) cell is scored against the real Soragni viability with the same global / within-drug / interaction rho and normalized regret@k, bracketed by controls:
 
-### Head-invariance
+- **Negative — within-drug permutation.** Shuffle the response within each drug; any organoid×drug interaction signal must vanish.
+- **Validation — readout gate.** Each readout is scored on *real* L1000 deltas to confirm it can detect a true drug effect (the gate: ≈0.143 vs a random-gene-set ≈0.065), so a null on generated deltas reflects the generation, not a dead readout.
 
-The headline comparison rides on a *linear* head, so the obvious objection is that a foundation-model embedding might only pay off under a *nonlinear* head. Running the same frozen GDSC2 → Soragni transfer through linear ridge, RBF kernel ridge, and the bilinear model shows the result holds across head families — the nonlinear head does **not** rescue Stack:
-
-| head | representation | interaction rho | p |
-|---|---|--:|--:|
-| linear | expression PCA | +0.130 | 0.105 |
-| linear | expression NMF | +0.184 | 0.035 |
-| linear | Stack | +0.130 | 0.085 |
-| kernel | expression PCA | **+0.225** | 0.005 |
-| kernel | Stack | +0.076 | 0.225 |
-| bilinear | 16 shared drugs | −0.019 | 0.420 |
-
-Under the linear head expression and Stack tie; under the kernel head **expression rises to 0.225 while Stack stays at 0.076** — the nonlinear capacity benefits expression, not the embedding. Stack ≤ expression is head-invariant.
-
-![Head-invariance](docs/figures/head_invariance.png)
-
-Regenerate the table and figure:
+The headline question is whether Stack's organoid-specific generated delta beats the simple baselines — the additive drug-mean floor and the PCA/NMF learned predictors — under any readout, on interaction and on the clinical regret@k. An earlier Stack-only run of this path was null (apoptosis ≈0.12 vs random p95 ≈0.13–0.14, robust to normalization), attributed to the domain gap (bulk organoids as pseudo-cells, off Stack's single-cell depth distribution) and a thin, looped context. The fair source×readout grid — additive, PCA, NMF, and Stack across all readouts — is implemented; **producing the numbers requires an Alpine run** with the L1000 `.gctx` and the Stack generation step (GPU). Results will be reported here once that run completes.
 
 ```bash
-uv run python scripts/transfer_gdsc_soragni.py --all-heads \
-    --stack-gdsc stack_gdsc.csv --stack-soragni stack_soragni.csv \
-    --out results/head_invariance.csv
-uv run python scripts/transfer_pharmaformer_lite.py --out results/head_invariance.csv
-uv run python scripts/plot_data.py
+# build the L1000 perturbation context, generate (GPU), then score every source x readout:
+uv run python scripts/build_l1000_context.py --l1000-dir . --gctx <level3>.gctx --out l1000_context.h5ad
+# stack-generation ... --base-adata l1000_context.h5ad --test-adata stack_input_sarcoma.h5ad --output-dir generated/
+uv run python scripts/score_viability_adapters.py --l1000-dir . --gctx <level3>.gctx --generated-dir generated/
 ```
 
 ## Affiliation
