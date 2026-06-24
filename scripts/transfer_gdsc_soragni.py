@@ -25,7 +25,6 @@ within-drug permutation null just reshuffles the Soragni labels -- no refit.
 from __future__ import annotations
 
 import argparse
-from functools import partial
 from pathlib import Path
 
 import numpy as np
@@ -40,7 +39,8 @@ from fmharness.evaluation import (
     interaction_rho,
     within_drug_rho,
 )
-from fmharness.probe import SimpleProbe
+from fmharness.probe import make_head
+from fmharness.probe.heads import HEADS
 
 SEED = 0
 GDSC_SARCOMA = [
@@ -101,6 +101,15 @@ def main() -> None:
     ap.add_argument("--pan-cancer", action="store_true", help="train on all GDSC2 lineages")
     ap.add_argument("--stack-gdsc", default=None)
     ap.add_argument("--stack-soragni", default=None)
+    # Swap the predictive head to test whether the finding is head-invariant:
+    # "linear" is the RidgeCV slope, "kernel" the RBF kernel ridge.
+    ap.add_argument("--head", choices=list(HEADS), default="linear")
+    ap.add_argument("--all-heads", action="store_true", help="run every head in turn")
+    ap.add_argument(
+        "--out",
+        default=None,
+        help="append (head, rep) metric rows to this CSV (e.g. results/head_invariance.csv)",
+    )
     args = ap.parse_args()
 
     repo = Path(__file__).resolve().parent.parent
@@ -133,19 +142,42 @@ def main() -> None:
         eg.index, es.index = eg.index.astype(str), es.index.astype(str)
         runs.append(("stack/pca", eg, es, "pca"))
 
+    heads = list(HEADS) if args.all_heads else [args.head]
     hdr = f"{'rep':18s}{'global_sp':>10}{'global_pe':>10}{'within':>9}{'interact':>10}{'p':>8}"
-    print(f"\n=== GDSC2 -> Soragni transfer (frozen, log1p CPM) ===\n{hdr}")
-    for label, fg, fs, reducer in runs:
-        factory = partial(
-            SimpleProbe,
-            n_components=args.n_components,
-            std_floor=args.std_floor,
-            per_drug=True,
-            reducer=reducer,
-        )
-        preds = transfer_predict(factory, fg, dg, fs, ds)
-        gs, gp, wd, it, pv = score(preds, args.n_permutations)
-        print(f"{label:18s}{gs:>+10.3f}{gp:>+10.3f}{wd:>+9.3f}{it:>+10.3f}{pv:>8.3f}")
+    rows: list[dict[str, object]] = []
+    for head in heads:
+        print(f"\n=== GDSC2 -> Soragni transfer (frozen, log1p CPM) | head={head} ===\n{hdr}")
+        for label, fg, fs, reducer in runs:
+            factory = make_head(
+                head,
+                n_components=args.n_components,
+                std_floor=args.std_floor,
+                per_drug=True,
+                reducer=reducer,
+            )
+            preds = transfer_predict(factory, fg, dg, fs, ds)
+            gs, gp, wd, it, pv = score(preds, args.n_permutations)
+            print(f"{label:18s}{gs:>+10.3f}{gp:>+10.3f}{wd:>+9.3f}{it:>+10.3f}{pv:>8.3f}")
+            rows.append(
+                {
+                    "head": head,
+                    "rep": label,
+                    "global_sp": gs,
+                    "global_pe": gp,
+                    "within": wd,
+                    "interact": it,
+                    "p": pv,
+                }
+            )
+
+    if args.out:
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        # Append so the bilinear row (from transfer_pharmaformer_lite.py) and any
+        # earlier head runs accumulate into one head-invariance table.
+        df = pd.DataFrame(rows)
+        df.to_csv(out, mode="a", header=not out.exists(), index=False)
+        print(f"\nwrote {len(rows)} rows -> {out}")
 
 
 if __name__ == "__main__":
