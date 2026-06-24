@@ -20,12 +20,17 @@ dependencies = [
     "typer>=0.12",
     "coderdata>=2.2.1",
     "xgboost>=3.2.0",
+    "pydeseq2>=0.4",
+    "openpyxl>=3.1",
 ]
 
 [project.optional-dependencies]
 ml = [
     "torch>=2.2",
     "transformers>=4.40",
+]
+viz = [
+    "matplotlib>=3.8",
 ]
 stack = [
     "arc-stack @ git+https://github.com/ArcInstitute/stack.git",

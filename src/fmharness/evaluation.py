@@ -7,6 +7,7 @@ by the controls so they share one code path.
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Callable
 
 import numpy as np
@@ -19,13 +20,42 @@ from fmharness.data.loaders import CoderDataBundle
 _MODEL_TYPE = {"organoid": "patient derived organoid", "tumor": "tumor"}
 
 
-def build_sample_design(bundle: CoderDataBundle, rna_source: str = "all", metric: str = "auc"):
+def cpm_bundle(bundle: CoderDataBundle) -> CoderDataBundle:
+    """Return a copy of ``bundle`` with expression X as per-million (CPM).
+
+    Prefers raw integer counts when present (GDSC2 keeps them in
+    ``layers['raw_counts']``); otherwise X is already count-derived and
+    length-free (Soragni CPM) and is renormalized to per-million. This puts
+    GDSC2 and Soragni on one shared, length-free normalization -- required for a
+    fair cross-substrate comparison, since the native loaders otherwise leave
+    GDSC2 on DESeq2 median-of-ratios and Soragni on CPM.
+    """
+    expr = bundle.expression.copy()
+    m = np.asarray(expr.layers.get("raw_counts", expr.X), dtype=np.float64)
+    lib = m.sum(axis=1, keepdims=True)
+    lib[lib == 0] = 1.0
+    expr.X = m / lib * 1e6
+    return dataclasses.replace(bundle, expression=expr)
+
+
+def build_sample_design(
+    bundle: CoderDataBundle,
+    rna_source: str = "all",
+    metric: str = "auc",
+    drug_key: str = "drug_id",
+):
     """Return (sample x gene expression frame, design[patient, drug, y]).
 
     ``rna_source`` selects one substrate's RNA by model_type, or "all".
     Expression is averaged per patient over its samples of that substrate.
     The design has one row per (patient, drug) with the mean response of the
     chosen metric.
+
+    ``drug_key`` chooses how drugs are identified in the ``drug`` column:
+    ``"drug_id"`` (each dataset's native id -- fine within a dataset) or
+    ``"pubchem_cid"`` (the canonical cross-dataset key -- required when joining
+    GDSC2 to Soragni, whose native drug ids share no namespace). Assays missing
+    the chosen key are dropped; multiple ids collapsing to one key are averaged.
     """
     improve_to_patient = {
         str(s.metadata.get("improve_sample_id")): s.patient_id for s in bundle.samples
@@ -54,15 +84,16 @@ def build_sample_design(bundle: CoderDataBundle, rna_source: str = "all", metric
         .mean()
     )
 
+    raw_drug = [getattr(x, drug_key) for x in bundle.drug_assays]
     a = pd.DataFrame(
         {
             "patient": [sid_to_patient.get(x.sample_id, x.sample_id) for x in bundle.drug_assays],
-            "drug": [x.drug_id for x in bundle.drug_assays],
+            "drug": [None if d is None else str(d) for d in raw_drug],
             "metric": [x.response_metric for x in bundle.drug_assays],
             "y": [x.response_value for x in bundle.drug_assays],
         }
     )
-    a = a[(a["metric"] == metric) & (a["patient"].isin(x_df.index.tolist()))]
+    a = a[(a["metric"] == metric) & a["drug"].notna() & (a["patient"].isin(x_df.index.tolist()))]
     design = a.groupby(["patient", "drug"], as_index=False)["y"].mean()
     return x_df, design
 

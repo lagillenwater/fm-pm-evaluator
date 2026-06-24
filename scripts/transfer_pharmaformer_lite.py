@@ -25,14 +25,15 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from scipy.stats import spearmanr
+from scipy.stats import pearsonr, spearmanr
 from sklearn.decomposition import PCA
 from sklearn.linear_model import RidgeCV
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
+from fmharness.bilinear import bilinear_features
 from fmharness.controls import permute_within_drug
-from fmharness.data.loaders import load_coderdata_tranche
+from fmharness.data.loaders import load_tranche
 from fmharness.evaluation import build_sample_design, interaction_rho, within_drug_rho
 
 SEED = 0
@@ -48,21 +49,32 @@ _ALPHAS = tuple(float(a) for a in np.logspace(-1.0, 6.0, 8))
 
 
 def load_fingerprints(repo: Path) -> pd.DataFrame:
-    """drug_id -> 1024-bit Morgan fingerprint, unioned across both tranches."""
+    """PubChem CID -> 1024-bit Morgan fingerprint, unioned across both tranches.
+
+    Keyed by CID so it joins the CID-keyed designs (build_sample_design with
+    drug_key='pubchem_cid'). CoderData's drug_descriptors are keyed by
+    improve_drug_id, which the matching drugs table maps to a PubChem CID.
+    """
     frames = []
     for ds in ("gdscv2", "sarcoma"):
         d = pd.read_csv(repo / f"data/raw/coderdata/{ds}_drug_descriptors.tsv.gz", sep="\t")
-        frames.append(d[d["structural_descriptor"] == "morgan fingerprint"])
-    mf = pd.concat(frames).drop_duplicates("improve_drug_id")
+        d = d[d["structural_descriptor"] == "morgan fingerprint"]
+        drugs = pd.read_csv(repo / f"data/raw/coderdata/{ds}_drugs.tsv.gz", sep="\t")
+        id2cid = {
+            str(i): str(int(c))
+            for i, c in zip(drugs["improve_drug_id"], drugs["pubchem_id"], strict=False)
+            if pd.notna(c)
+        }
+        frames.append(d.assign(cid=d["improve_drug_id"].astype(str).map(id2cid)))
+    mf = pd.concat(frames).dropna(subset=["cid"]).drop_duplicates("cid")
     bits = np.array([[int(c) for c in str(v)] for v in mf["descriptor_value"]], dtype=np.float64)
-    return pd.DataFrame(bits, index=mf["improve_drug_id"].astype(str))
+    return pd.DataFrame(bits, index=pd.Index(mf["cid"].astype(str)))
 
 
 def _features(design: pd.DataFrame, zdf: pd.DataFrame, gdf: pd.DataFrame) -> np.ndarray:
     z = zdf.loc[design["patient"]].to_numpy()
     g = gdf.loc[design["drug"].astype(str)].to_numpy()
-    inter = np.einsum("ij,ik->ijk", z, g).reshape(len(z), -1)
-    return np.hstack([z, g, inter])
+    return bilinear_features(z, g)
 
 
 def _score(preds: pd.DataFrame, n_perm: int) -> tuple[float, float, float, float, int]:
@@ -85,13 +97,21 @@ def main() -> None:
     ap.add_argument("--kg", type=int, default=20, help="fingerprint PCs")
     ap.add_argument("--pan-cancer", action="store_true", help="train on all GDSC2")
     ap.add_argument("--n-permutations", type=int, default=1000)
+    ap.add_argument(
+        "--out",
+        default=None,
+        help="append head='bilinear' metric rows to this CSV (e.g. results/head_invariance.csv)",
+    )
     args = ap.parse_args()
 
     repo = Path(__file__).resolve().parent.parent
-    xs, ds = build_sample_design(load_coderdata_tranche("sarcoma", repo), "organoid", "auc")
+    # Join GDSC2 <-> Soragni (and the fingerprint table) on PubChem CID.
+    xs, ds = build_sample_design(
+        load_tranche("sarcoma", repo), "organoid", "viability", drug_key="pubchem_cid"
+    )
     ctf = None if args.pan_cancer else GDSC_SARCOMA
-    gbun = load_coderdata_tranche("gdscv2", repo, cancer_type_filter=ctf)
-    xg, dg = build_sample_design(gbun, "all", "auc")
+    gbun = load_tranche("gdscv2", repo, cancer_type_filter=ctf)
+    xg, dg = build_sample_design(gbun, "all", "auc", drug_key="pubchem_cid")
     fp = load_fingerprints(repo)
 
     # keep rows whose drug has a fingerprint
@@ -152,9 +172,32 @@ def main() -> None:
         f"(n={len(te)})"
     )
     print(f"\n{'drug set':16s}{'n_drugs':>8}{'global_sp':>10}{'within':>9}{'interact':>10}{'p':>8}")
+    rows: list[dict[str, object]] = []
     for label, sub in (("all soragni", preds), ("16 shared", shared_sub)):
         gs, wd, it, pv, nd = _score(sub, args.n_permutations)
         print(f"{label:16s}{nd:>8d}{gs:>+10.3f}{wd:>+9.3f}{it:>+10.3f}{pv:>8.3f}")
+        gp = float(
+            np.asarray(pearsonr(sub["y_true"].to_numpy(float), sub["y_pred"].to_numpy(float)))[0]
+        )
+        rows.append(
+            {
+                "head": "bilinear",
+                "rep": label,
+                "global_sp": gs,
+                "global_pe": gp,
+                "within": wd,
+                "interact": it,
+                "p": pv,
+            }
+        )
+
+    if args.out:
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        # Append so this bilinear row joins the linear/kernel rows from
+        # transfer_gdsc_soragni.py in one head-invariance table.
+        pd.DataFrame(rows).to_csv(out, mode="a", header=not out.exists(), index=False)
+        print(f"\nwrote {len(rows)} rows -> {out}")
 
 
 if __name__ == "__main__":

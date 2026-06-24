@@ -31,7 +31,9 @@ foundation-model vector for Stack. Swapping the embedding is the only change, so
 the same probe scores every model.
 
 ``predict_parts`` returns ``(a_d, residual)`` separately so the metrics can score
-the embedding part alone, avoiding the leave-one-out drug-base artifact.
+the embedding part alone, avoiding the leave-one-out drug-base artifact. The
+per-drug mean and the PCA/NMF reduction shared with the other heads live in
+``probe.base.ProbeBase``.
 """
 
 from __future__ import annotations
@@ -41,50 +43,16 @@ from collections.abc import Sequence
 import numpy as np
 import pandas as pd
 from numpy.typing import ArrayLike, NDArray
-from sklearn.base import BaseEstimator, TransformerMixin
-from sklearn.decomposition import NMF, PCA
 from sklearn.linear_model import RidgeCV
 from sklearn.model_selection import GroupKFold
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
 
-# Penalty path searched by the inner CV. PCA scores of standardized expression
-# carry large variance (top components ~10^3), so the path must reach well above
-# that for the slope to shrink to ~0 when the embedding is uninformative.
-_ALPHAS = tuple(float(a) for a in np.logspace(0.0, 8.0, 9))
+from fmharness.probe.base import ALPHAS, MIN_DRUG_N, ProbeBase
 
-# A per-drug slope needs a few organoids to fit; below this the drug contributes
-# no embedding term (it falls back to its drug mean).
-_MIN_DRUG_N = 4
+__all__ = ["SimpleProbe"]
 
 
-class _FlooredScaler(BaseEstimator, TransformerMixin):
-    """Standardize, but never divide by a standard deviation below ``floor``.
-
-    A gene nearly constant across the training organoids has a tiny SD; dividing
-    by it turns a small expression difference in a held-out organoid into a huge
-    standardized value that the ridge slope cannot rein in (the source of the
-    AUC ~1400 blow-ups). Flooring the SD bounds that amplification while leaving
-    well-varying genes essentially untouched. ``floor=0`` reproduces a plain
-    StandardScaler (zero-variance genes still get scale 1).
-    """
-
-    def __init__(self, floor: float = 0.0) -> None:
-        self.floor = floor
-
-    def fit(self, x: ArrayLike, y: object = None) -> _FlooredScaler:
-        arr = np.asarray(x, dtype=np.float64)
-        self.mean_ = arr.mean(axis=0)
-        scale = np.maximum(arr.std(axis=0), self.floor)
-        scale[scale == 0.0] = 1.0
-        self.scale_ = scale
-        return self
-
-    def transform(self, x: ArrayLike) -> NDArray[np.float64]:
-        return (np.asarray(x, dtype=np.float64) - self.mean_) / self.scale_
-
-
-class SimpleProbe:
+class SimpleProbe(ProbeBase):
     """Per-drug mean + a RidgeCV slope (shared or per-drug) on the top-k PCs."""
 
     def __init__(
@@ -94,19 +62,17 @@ class SimpleProbe:
         per_drug: bool = False,
         reducer: str = "pca",
         std_floor: float = 0.0,
-        alphas: Sequence[float] = _ALPHAS,
+        alphas: Sequence[float] = ALPHAS,
         seed: int = 0,
     ) -> None:
-        if reducer not in ("pca", "nmf"):
-            raise ValueError("reducer must be 'pca' or 'nmf'")
-        self.n_components = n_components
-        self.per_drug = per_drug
-        self.reducer = reducer
-        self.std_floor = std_floor
+        super().__init__(
+            n_components=n_components,
+            per_drug=per_drug,
+            reducer=reducer,
+            std_floor=std_floor,
+            seed=seed,
+        )
         self.alphas = tuple(alphas)
-        self.seed = seed
-        self._drug_means: dict[str, float] = {}
-        self._global_mean = 0.0
         # shared-slope state
         self._embed: Pipeline | None = None
         # per-drug-slope state: a shared (scaler, pca) transform plus one
@@ -115,34 +81,6 @@ class SimpleProbe:
         self._coef: pd.DataFrame | None = None  # index=drug, cols=PCs
         self._intercept: pd.Series | None = None  # index=drug
 
-    def _base(self, drug_ids: Sequence[str]) -> NDArray[np.float64]:
-        """Per-drug mean, with the global mean for drugs unseen at fit."""
-        return (
-            pd.Series(drug_ids)
-            .map(self._drug_means)
-            .fillna(self._global_mean)
-            .to_numpy(dtype=np.float64)
-        )
-
-    def _reducer_steps(self, k: int) -> list[tuple[str, BaseEstimator]]:
-        """Steps reducing the embedding to k components for the ridge slope.
-
-        PCA acts on standardized features, so it is not dominated by a few
-        high-variance genes and its components are orthogonal. NMF requires
-        non-negative input, so it acts on the expression directly and returns
-        parts-based, non-negative factors (gene programs) rather than orthogonal
-        components -- a more biologically natural low-rank summary of expression.
-        """
-        if self.reducer == "nmf":
-            # sklearn-stubs mis-types n_components as str; the API takes an int.
-            nmf = NMF(n_components=k, init="nndsvda", random_state=self.seed, max_iter=2000)  # type: ignore[arg-type]
-            return [("nmf", nmf)]
-        scaler = _FlooredScaler(self.std_floor) if self.std_floor > 0 else StandardScaler()
-        return [
-            ("scaler", scaler),
-            ("pca", PCA(n_components=k, random_state=self.seed)),
-        ]
-
     def fit(
         self,
         embeddings: ArrayLike,
@@ -150,22 +88,7 @@ class SimpleProbe:
         y: ArrayLike,
         groups: Sequence[str] | None = None,
     ) -> SimpleProbe:
-        emb = np.asarray(embeddings, dtype=np.float64)
-        y_arr = np.asarray(y, dtype=np.float64)
-        if emb.ndim != 2 or len(drug_ids) != emb.shape[0] or len(y_arr) != emb.shape[0]:
-            raise ValueError("embeddings, drug_ids, y must share the same number of rows")
-        if self.reducer == "nmf" and emb.size and float(emb.min()) < 0.0:
-            raise ValueError("nmf reducer requires non-negative input (e.g. log1p expression)")
-
-        drug_arr = np.asarray(drug_ids, dtype=object)
-        self._global_mean = float(y_arr.mean())
-        self._drug_means = {
-            str(k): float(v) for k, v in pd.Series(y_arr).groupby(drug_arr).mean().items()
-        }
-        residual = y_arr - self._base(drug_ids)
-
-        # k capped by the rank ceiling; 0 -> drug-mean baseline (no embedding term).
-        k = min(self.n_components, max(0, emb.shape[0] - 1), emb.shape[1])
+        emb, drug_arr, residual, k = self._prepare_fit(embeddings, drug_ids, y)
         self._embed = self._transform = None
         self._coef = self._intercept = None
         if k > 0:
@@ -215,7 +138,7 @@ class SimpleProbe:
         intercept: dict[str, float] = {}
         for d in np.unique(drug_arr):
             m = drug_arr == d
-            if int(m.sum()) < _MIN_DRUG_N:
+            if int(m.sum()) < MIN_DRUG_N:
                 continue
             ridge = RidgeCV(alphas=np.asarray(self.alphas, dtype=np.float64)).fit(
                 scores[m], residual[m]

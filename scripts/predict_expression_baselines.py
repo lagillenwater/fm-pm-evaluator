@@ -33,7 +33,7 @@ import pandas as pd
 from sklearn.decomposition import NMF, PCA
 from sklearn.linear_model import Ridge
 
-from fmharness.data.loaders import load_coderdata_tranche
+from fmharness.data.loaders import load_tranche
 from fmharness.evaluation import build_sample_design
 from fmharness.signatures import load_hallmark, score_signatures
 
@@ -105,7 +105,7 @@ def main() -> None:
         if args.signatures == "hallmark"
         else None
     )
-    _, design = build_sample_design(load_coderdata_tranche("sarcoma", repo), "organoid", "auc")
+    _, design = build_sample_design(load_tranche("sarcoma", repo), "organoid", "viability")
 
     base = ad.read_h5ad(
         repo / args.baseline if not Path(args.baseline).is_absolute() else Path(args.baseline)

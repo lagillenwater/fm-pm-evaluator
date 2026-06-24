@@ -19,6 +19,7 @@ NormalizationMethod = Literal[
     "median_of_ratios",
     "log1p_median_of_ratios",
     "tpm",
+    "cpm",
 ]
 GeneIdNamespace = Literal["ensembl", "symbol", "entrez"]
 

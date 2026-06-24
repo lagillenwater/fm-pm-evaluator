@@ -31,7 +31,7 @@ import numpy as np
 import pandas as pd
 
 from fmharness.controls import permute_within_drug
-from fmharness.data.loaders import load_coderdata_tranche
+from fmharness.data.loaders import load_tranche
 from fmharness.evaluation import build_sample_design, global_spearman, interaction_rho
 from fmharness.probe import SimpleProbe
 from fmharness.signatures import load_hallmark, sensitivity_scores
@@ -110,7 +110,9 @@ def drug_mean(ds: pd.DataFrame) -> pd.DataFrame:
 
 
 def pertid_to_drug(repo: Path, drugs: set[str]) -> dict[str, str]:
-    """L1000 pert_id -> Soragni improve_drug_id, via PubChem CID / InChIKey prefix."""
+    """L1000 pert_id -> Soragni PubChem CID (string), via PubChem CID / InChIKey
+    prefix. ``drugs`` is the set of Soragni CIDs (build_sample_design
+    drug_key='pubchem_cid')."""
     cache = Path("/tmp/l1000_pert_info.txt.gz")
     if not cache.exists():
         urllib.request.urlretrieve(PERT_INFO_URL, cache)
@@ -119,12 +121,13 @@ def pertid_to_drug(repo: Path, drugs: set[str]) -> dict[str, str]:
     cid2p = {_ncid(c): p for c, p in zip(cp["pubchem_cid"], cp["pert_id"], strict=True)}
     ikb2p = {str(k): p for k, p in zip(cp["inchi_key_prefix"], cp["pert_id"], strict=True)}
     dr = pd.read_csv(repo / "data/raw/coderdata/sarcoma_drugs.tsv.gz", sep="\t")
-    sor = dr[dr["improve_drug_id"].astype(str).isin(drugs)].drop_duplicates("improve_drug_id")
+    dr_cid = dr["pubchem_id"].map(lambda c: str(int(c)) if pd.notna(c) else None)
+    sor = dr[dr_cid.isin(drugs)].drop_duplicates("improve_drug_id")
     out: dict[str, str] = {}
     for _, r in sor.iterrows():
         pid = cid2p.get(_ncid(r["pubchem_id"])) or ikb2p.get(str(r["InChIKey"])[:14])
         if pid:
-            out[pid] = str(r["improve_drug_id"])
+            out[pid] = str(int(r["pubchem_id"]))
     return out
 
 
@@ -185,8 +188,12 @@ def main() -> None:
         if args.signatures == "hallmark"
         else None
     )
-    xs, ds = build_sample_design(load_coderdata_tranche("sarcoma", repo), "organoid", "auc")
-    xg, dg = build_sample_design(load_coderdata_tranche("gdscv2", repo), "all", "auc")
+    # CID is the canonical cross-dataset drug key (Soragni names vs GDSC2 DRUG_IDs
+    # share no namespace); the L1000 pert map is keyed by CID to match.
+    xs, ds = build_sample_design(
+        load_tranche("sarcoma", repo), "organoid", "viability", drug_key="pubchem_cid"
+    )
+    xg, dg = build_sample_design(load_tranche("gdscv2", repo), "all", "auc", drug_key="pubchem_cid")
     gdsc_drugs = set(dg["drug"].astype(str))
 
     # direct-L1000 defines Path B's drug set (the L1000-matched drugs) when a context is given

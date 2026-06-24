@@ -19,14 +19,11 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-import matplotlib
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import numpy as np
+from _plotting import plt, savefig
 from scipy.stats import pearsonr, spearmanr
 
-from fmharness.data.loaders import load_coderdata_tranche
+from fmharness.data.loaders import load_tranche
 from fmharness.evaluation import build_sample_design, grouped_cv_predict
 from fmharness.probe import SimpleProbe
 
@@ -39,8 +36,8 @@ def main() -> None:
     args = ap.parse_args()
 
     repo = Path(__file__).resolve().parent.parent
-    bundle = load_coderdata_tranche("sarcoma", repo)
-    x_df, design = build_sample_design(bundle, "organoid", "auc")
+    bundle = load_tranche("sarcoma", repo)
+    x_df, design = build_sample_design(bundle, "organoid", "viability")
     x_expr = np.log1p(x_df)
 
     models = {
@@ -99,11 +96,7 @@ def main() -> None:
         y=1.02,
     )
     fig.tight_layout()
-
-    out = repo / "results" / f"pearson_scatter_{args.n_splits}fold.png"
-    out.parent.mkdir(exist_ok=True)
-    fig.savefig(out, dpi=150, bbox_inches="tight")
-    print(f"\nwrote {out}")
+    savefig(fig, repo / "results" / f"pearson_scatter_{args.n_splits}fold.png")
 
 
 if __name__ == "__main__":
