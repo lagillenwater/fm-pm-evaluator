@@ -191,7 +191,7 @@ def main() -> None:
     # CID is the canonical cross-dataset drug key (Soragni names vs GDSC2 DRUG_IDs
     # share no namespace); the L1000 pert map is keyed by CID to match.
     xs, ds = build_sample_design(
-        load_tranche("sarcoma", repo), "organoid", "viability", drug_key="pubchem_cid"
+        load_tranche("sarcoma", repo), "tumor", "viability", drug_key="pubchem_cid"
     )
     xg, dg = build_sample_design(load_tranche("gdscv2", repo), "all", "auc", drug_key="pubchem_cid")
     gdsc_drugs = set(dg["drug"].astype(str))

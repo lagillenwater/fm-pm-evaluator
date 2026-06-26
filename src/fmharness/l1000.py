@@ -110,7 +110,7 @@ def soragni_pert_map(repo: Path) -> dict[str, str]:
     pert = pd.read_csv(cache, sep="\t", low_memory=False)
     dr = pd.read_csv(repo / "data/raw/coderdata/sarcoma_drugs.tsv.gz", sep="\t")
     _, ds = build_sample_design(
-        load_tranche("sarcoma", repo), "organoid", "viability", drug_key="pubchem_cid"
+        load_tranche("sarcoma", repo), "tumor", "viability", drug_key="pubchem_cid"
     )
     soragni_cids = [str(d) for d in ds["drug"]]
     dr_cid = dr["pubchem_id"].map(lambda c: str(int(c)) if pd.notna(c) else None)

@@ -124,9 +124,9 @@ def main() -> None:
 
     sb = load_tranche("sarcoma", repo)
     gb = load_tranche("gdscv2", repo, cancer_type_filter=GDSC_SARCOMA)
-    _, ds = build_sample_design(sb, "organoid", "viability")  # drug = Soragni name
+    _, ds = build_sample_design(sb, "tumor", "viability")  # drug = Soragni name
     _, dg = build_sample_design(gb, "all", "auc")
-    _, ds_cid = build_sample_design(sb, "organoid", "viability", drug_key="pubchem_cid")
+    _, ds_cid = build_sample_design(sb, "tumor", "viability", drug_key="pubchem_cid")
     _, dg_cid = build_sample_design(gb, "all", "auc", drug_key="pubchem_cid")
 
     plot_cohort_composition(sb, gb, out_dir)

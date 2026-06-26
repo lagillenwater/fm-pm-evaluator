@@ -633,7 +633,7 @@ def main() -> None:
 
     repo = Path(__file__).resolve().parent.parent
     sb = cpm_bundle(load_tranche("sarcoma", repo))
-    x_df, design = build_sample_design(sb, "organoid", "viability")  # drug = Soragni name
+    x_df, design = build_sample_design(sb, "tumor", "viability")  # drug = Soragni name
     x_log = np.log1p(x_df)
     drug2cid = {a.drug_name: a.pubchem_cid for a in sb.drug_assays if a.pubchem_cid}
     alt = _wes_alterations(repo)

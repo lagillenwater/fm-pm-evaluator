@@ -53,7 +53,7 @@ def _ncid(x: object) -> str:
 def soragni_pert_ids(repo: Path, pert_info: pd.DataFrame) -> dict[str, str]:
     """Map Soragni drug name -> L1000 pert_id via PubChem CID or InChIKey prefix."""
     dr = pd.read_csv(repo / "data/raw/coderdata/sarcoma_drugs.tsv.gz", sep="\t")
-    _, ds = build_sample_design(load_tranche("sarcoma", repo), "organoid", "viability")
+    _, ds = build_sample_design(load_tranche("sarcoma", repo), "tumor", "viability")
     sor = dr[dr["improve_drug_id"].astype(str).isin(set(ds["drug"].astype(str)))]
     sor = sor.drop_duplicates("improve_drug_id")
     cp = pert_info[pert_info["pert_type"] == "trt_cp"]

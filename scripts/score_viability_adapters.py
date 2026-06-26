@@ -118,7 +118,7 @@ def main() -> None:
         else None
     )
 
-    _, design = build_sample_design(load_tranche("sarcoma", repo), "organoid", "viability")
+    _, design = build_sample_design(load_tranche("sarcoma", repo), "tumor", "viability")
 
     # train cohort: real L1000 deltas -> GDSC2 AUC (for the supervised adapters and the
     # additive baseline). Keep the full delta for the additive per-drug mean; fit the
