@@ -1,11 +1,10 @@
 """Data-representation figures for the README -- the data, no conclusions.
 
 The raw inputs and outputs of the generation evaluation, no model / rho / p-value:
-the Soragni cohort make-up, the response distributions (Soragni viability = the
-target; GDSC2 AUC = the readout training labels), the Soragni organoid x drug
-viability matrix, and L1000 drug coverage (which Soragni drugs have a real L1000
-perturbation, so can be scored). GDSC2/DepMap RNA-seq is not a model input here, so
-no GDSC2 cohort or shared-panel figure -- GDSC2 enters only as readout labels.
+the Soragni cohort make-up, the Soragni viability distribution (the target), and the
+Soragni organoid x drug viability matrix. GDSC2/DepMap is not a model input here (it
+enters only as readout training labels), so it gets no figure. L1000 drug coverage is
+printed as a text list rather than plotted.
 
 Optionally renders the head-invariance figure from results/head_invariance.csv when
 that file exists; it summarizes a produced metric table, still without prose.
@@ -24,8 +23,6 @@ from _plotting import plt, savefig
 
 from fmharness.data.loaders import load_tranche
 from fmharness.evaluation import build_sample_design
-
-GDSC_SARCOMA = ["sarcoma"]
 
 
 def _subtype_counts(bundle) -> Counter:
@@ -47,18 +44,14 @@ def plot_cohort_composition(sb, out_dir: Path) -> None:
     savefig(fig, out_dir / "cohort_composition.png")
 
 
-def plot_response_distributions(ds, dg, out_dir: Path) -> None:
-    fig, axes = plt.subplots(1, 2, figsize=(13, 4.6))
-    axes[0].hist(ds["y"].to_numpy(float), bins=40, color="#228833")
-    axes[0].set_title("Soragni viability (prediction target)")
-    axes[0].set_xlabel("Viability_Score (% of vehicle)")
-    axes[0].set_ylabel("organoid x drug pairs")
-    axes[1].hist(dg["y"].to_numpy(float), bins=40, color="#ee6677")
-    axes[1].set_title("GDSC2 AUC (readout training labels)")
-    axes[1].set_xlabel("dose-response AUC")
-    axes[1].set_ylabel("cell-line x drug pairs")
+def plot_soragni_viability(ds, out_dir: Path) -> None:
+    fig, ax = plt.subplots(figsize=(7, 4.6))
+    ax.hist(ds["y"].to_numpy(float), bins=40, color="#228833")
+    ax.set_title("Soragni viability (prediction target)")
+    ax.set_xlabel("Viability_Score (% of vehicle)")
+    ax.set_ylabel("organoid x drug pairs")
     fig.tight_layout()
-    savefig(fig, out_dir / "response_distributions.png")
+    savefig(fig, out_dir / "soragni_viability.png")
 
 
 def plot_soragni_heatmap(ds, out_dir: Path) -> None:
@@ -75,28 +68,18 @@ def plot_soragni_heatmap(ds, out_dir: Path) -> None:
     savefig(fig, out_dir / "soragni_response_heatmap.png")
 
 
-def plot_l1000_coverage(ds_cid, sb, repo: Path, out_dir: Path) -> None:
-    """Which Soragni drugs have a real L1000 perturbation (so can be scored)."""
+def report_l1000_coverage(ds_cid, sb, repo: Path) -> None:
+    """Print which Soragni drugs have a real L1000 perturbation (a text list, no plot)."""
     from fmharness.l1000 import soragni_pert_map
 
-    covered = set(soragni_pert_map(repo).values())  # Soragni PubChem CIDs present in L1000
+    covered_cids = set(soragni_pert_map(repo).values())  # Soragni PubChem CIDs present in L1000
     cid2name = {str(a.pubchem_cid): a.drug_name for a in sb.drug_assays if a.pubchem_cid}
     cids = sorted(set(ds_cid["drug"].astype(str)))
-    rows = sorted(
-        ((cid2name.get(c, c), c in covered) for c in cids), key=lambda r: (not r[1], r[0])
-    )
-    names = [r[0] for r in rows]
-    colors = ["#228833" if r[1] else "#cccccc" for r in rows]
-    fig, ax = plt.subplots(figsize=(7, 0.32 * len(names) + 1.5))
-    ax.barh(range(len(names)), [1] * len(names), color=colors)
-    ax.set_yticks(range(len(names)))
-    ax.set_yticklabels(names, fontsize=8)
-    ax.invert_yaxis()
-    ax.set_xticks([])
-    n_cov = sum(r[1] for r in rows)
-    ax.set_title(f"Soragni drugs covered by L1000 ({n_cov}/{len(names)}); green = covered")
-    fig.tight_layout()
-    savefig(fig, out_dir / "l1000_coverage.png")
+    yes = sorted(cid2name.get(c, c) for c in cids if c in covered_cids)
+    no = sorted(cid2name.get(c, c) for c in cids if c not in covered_cids)
+    print(f"\nL1000 drug coverage: {len(yes)}/{len(cids)} Soragni drugs have an L1000 perturbation")
+    print(f"  covered:     {', '.join(yes)}")
+    print(f"  not in L1000: {', '.join(no)}")
 
 
 def plot_head_invariance(csv: Path, out_dir: Path) -> None:
@@ -124,18 +107,16 @@ def main() -> None:
     out_dir = Path(args.out_dir) if args.out_dir else repo / "docs" / "figures"
 
     sb = load_tranche("sarcoma", repo)
-    gb = load_tranche("gdscv2", repo, cancer_type_filter=GDSC_SARCOMA)
     _, ds = build_sample_design(sb, "tumor", "viability")  # drug = Soragni name
-    _, dg = build_sample_design(gb, "all", "auc")  # GDSC2 AUC = readout training labels
     _, ds_cid = build_sample_design(sb, "tumor", "viability", drug_key="pubchem_cid")
 
     plot_cohort_composition(sb, out_dir)
-    plot_response_distributions(ds, dg, out_dir)
+    plot_soragni_viability(ds, out_dir)
     plot_soragni_heatmap(ds, out_dir)
     try:
-        plot_l1000_coverage(ds_cid, sb, repo, out_dir)
+        report_l1000_coverage(ds_cid, sb, repo)
     except Exception as e:
-        print(f"(skipped l1000_coverage figure: {e})")
+        print(f"(skipped l1000 coverage list: {e})")
 
     hi = repo / "results" / "head_invariance.csv"
     if hi.exists():
