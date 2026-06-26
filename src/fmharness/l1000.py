@@ -320,11 +320,19 @@ def build_l1000_gdsc_pairs(
         l1000_dir / "GSE92742_Broad_LINCS_inst_info.txt.gz", sep="\t", low_memory=False
     )
     gene = pd.read_csv(l1000_dir / "GSE92742_Broad_LINCS_gene_info.txt.gz", sep="\t")
-    xg, dg = build_sample_design(load_tranche("gdscv2", repo), "all", "auc", drug_key="pubchem_cid")
+    gb = load_tranche("gdscv2", repo)
+    xg, dg = build_sample_design(gb, "all", "auc", drug_key="pubchem_cid")
     gdr = pd.read_csv(repo / "data/raw/coderdata/gdscv2_drugs.tsv.gz", sep="\t")
     _, pert2drug = drug_pert_maps(gdr, pert)
 
-    gcell = {_norm(c): str(c) for c in xg.index}
+    # GDSC2 samples are keyed by DepMap ModelID (ACH-...); L1000 wells are keyed by
+    # cell-line name (e.g. "A375"). Map each ACH id to its stripped cell-line name so
+    # the cohorts join on the shared name namespace -- xg.index is ACH ids, so a
+    # direct name match would be empty.
+    ach2name = {
+        str(p.patient_id): str(p.metadata.get("stripped_cell_line_name") or "") for p in gb.patients
+    }
+    gcell = {_norm(ach2name[str(c)]): str(c) for c in xg.index if ach2name.get(str(c))}
     lcell = {_norm(c): str(c) for c in inst["cell_id"].unique()}
     shared = set(gcell) & set(lcell)
     l_ids = [lcell[k] for k in shared]
