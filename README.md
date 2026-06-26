@@ -63,12 +63,12 @@ Every model implements one `ModelAdapter` ([src/fmharness/models/adapter.py](src
 - **L1000** (LINCS GSE92742) — drug-treated + DMSO bulk profiles; the perturbation context (prompt) and the readout-validation cohort
 - **GDSC2** sarcoma cell lines (DepMap RNA-seq + GDSC2 screen) — the viability labels that train the supervised readouts
 
-The cohorts and the shared drug panel (the raw inputs, no model):
+The Soragni cohort, the response distributions, and L1000 drug coverage (the raw inputs, no model):
 
-![Cohort composition](docs/figures/cohort_composition.png)
+![Soragni cohort composition](docs/figures/cohort_composition.png)
 ![Response distributions](docs/figures/response_distributions.png)
 ![Soragni organoid x drug viability](docs/figures/soragni_response_heatmap.png)
-![Shared drug panel](docs/figures/shared_panel.png)
+![L1000 drug coverage](docs/figures/l1000_coverage.png)
 
 Regenerate with `uv run python scripts/plot_data.py`.
 
