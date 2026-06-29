@@ -11,6 +11,7 @@ import pandas as pd
 from fmharness.l1000 import (
     build_additive_deltas,
     build_generated_deltas,
+    build_knn_deltas,
     build_learned_deltas,
     drug_pert_maps,
     logcpm,
@@ -129,3 +130,38 @@ def test_build_learned_deltas_is_drug_mean_plus_organoid_correction() -> None:
     o1 = delta[(key["patient"] == "o1") & (key["drug"] == "d1")].to_numpy()[0]
     o2 = delta[(key["patient"] == "o2") & (key["drug"] == "d1")].to_numpy()[0]
     assert not np.allclose(o1, o2)
+
+
+def test_build_knn_deltas_picks_nearest_line() -> None:
+    # 3 training lines with orthogonal baselines; each query points along one line's
+    # direction, so its k=1 neighbor (per drug) is that line -> it inherits that line's
+    # real delta. This is the cell-specific behavior the drug-agnostic map lacked.
+    genes = pd.Index(["A", "B", "C"])
+    train_base = pd.DataFrame(
+        [[10.0, 0.0, 0.0], [0.0, 10.0, 0.0], [0.0, 0.0, 10.0]],
+        index=pd.Index(["L1", "L2", "L3"]),
+        columns=genes,
+    )
+    keys = [(c, d) for d in ("d1", "d2") for c in ("L1", "L2", "L3")]
+    train_key = pd.DataFrame(keys, columns=pd.Index(["patient", "drug"]))
+    per_line = {"L1": [1.0, 0.0, 0.0], "L2": [0.0, 1.0, 0.0], "L3": [0.0, 0.0, 1.0]}
+    train_delta = pd.DataFrame([per_line[c] for c, _ in keys], columns=genes)
+    # o1 aligns with L2, o2 with L1
+    target_base = pd.DataFrame(
+        [[0.0, 9.0, 1.0], [9.0, 1.0, 0.0]], index=pd.Index(["o1", "o2"]), columns=genes
+    )
+
+    delta, key = build_knn_deltas(
+        train_base, train_delta, train_key, target_base, ["o1", "o2"], k=1
+    )
+    assert delta.shape == (2 * 2, 3)  # 2 drugs x 2 targets
+    assert list(delta.columns) == list(genes)
+    for d in ("d1", "d2"):
+        o1 = delta[(key["patient"] == "o1") & (key["drug"] == d)].to_numpy()[0]
+        o2 = delta[(key["patient"] == "o2") & (key["drug"] == d)].to_numpy()[0]
+        assert np.allclose(o1, [0.0, 1.0, 0.0])  # nearest L2 -> L2's delta
+        assert np.allclose(o2, [1.0, 0.0, 0.0])  # nearest L1 -> L1's delta
+
+    # determinism: identical inputs -> identical output
+    d2, _ = build_knn_deltas(train_base, train_delta, train_key, target_base, ["o1", "o2"], k=1)
+    assert np.allclose(delta.to_numpy(), d2.to_numpy())

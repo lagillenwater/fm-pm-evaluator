@@ -294,6 +294,82 @@ def build_learned_deltas(
     return delta, key
 
 
+def build_knn_deltas(
+    train_base: pd.DataFrame,
+    train_delta: pd.DataFrame,
+    train_key: pd.DataFrame,
+    target_base: pd.DataFrame,
+    patients: list[str],
+    *,
+    k: int = 10,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """k-NN delta predictor -- the cell-specific baseline matched to Stack's information.
+
+    For each (target sample, drug) the predicted delta is the mean *real* delta of the
+    ``k`` training cell lines whose baseline expression is closest to the target's
+    baseline, among the lines treated with that drug. This is the transparent analogue of
+    Stack's in-context generation: both see the query baseline and the drug's treated
+    examples, but k-NN simply averages the nearest examples' responses instead of
+    generating one. It sits between the additive floor (which ignores the baseline) and
+    Stack: the query baseline selects *which* responses to average, so -- unlike the
+    drug-agnostic linear map -- it can express cell x drug interaction.
+
+    Baselines are compared on standardized, L2-normalized shared-gene profiles (cosine
+    similarity, scale-free). Returns ``(delta[pairs x genes], key[patient, drug])`` in the
+    same shape as the other delta sources.
+    """
+    g = sorted(
+        {str(c) for c in train_base.columns}
+        & {str(c) for c in train_delta.columns}
+        & {str(c) for c in target_base.columns}
+    )
+    if not g:
+        raise ValueError("no shared genes among train_base, train_delta, target_base")
+
+    sc = StandardScaler().fit(train_base[g].to_numpy(dtype=np.float64))
+
+    def _emb(frame: pd.DataFrame) -> np.ndarray:
+        z = sc.transform(np.nan_to_num(frame.reindex(columns=g).to_numpy(dtype=np.float64)))
+        norm = np.linalg.norm(z, axis=1, keepdims=True)
+        norm[norm == 0.0] = 1.0
+        return z / norm
+
+    pats = [str(p) for p in patients]
+    have = [p for p in pats if p in {str(i) for i in target_base.index}]
+    if not have:
+        raise ValueError("no target samples have a usable baseline")
+    q_emb = _emb(target_base.loc[have])  # (n_have x dim), unit vectors
+
+    line_ids = [str(i) for i in train_base.index]
+    line_emb = _emb(train_base)  # (n_lines x dim)
+    line_pos = {lid: i for i, lid in enumerate(line_ids)}
+
+    tk_drug = train_key["drug"].astype(str).to_numpy()
+    row_line = pd.Series(train_key["patient"].astype(str).to_numpy()).map(line_pos).to_numpy()
+    td = train_delta[g].to_numpy(dtype=np.float64)
+
+    # one pass per drug (drugs are few); the query x line neighbor search is vectorized.
+    delta_blocks: list[np.ndarray] = []
+    keys: list[tuple[str, str]] = []
+    for d in sorted(set(tk_drug)):
+        rows = np.flatnonzero(tk_drug == d)
+        li = row_line[rows]
+        keep = ~pd.isna(li)
+        rows, li = rows[keep], li[keep].astype(int)
+        if rows.size == 0:
+            continue
+        sims = q_emb @ line_emb[li].T  # (n_have x n_d) cosine, unit vectors
+        kk = min(k, rows.size)
+        nn = np.argpartition(-sims, kk - 1, axis=1)[:, :kk]  # k nearest lines per target
+        delta_blocks.append(td[rows][nn].mean(axis=1))  # (n_have x genes)
+        keys.extend((p, d) for p in have)
+    if not delta_blocks:
+        raise ValueError("no drug had a training line with a usable baseline")
+    delta = pd.DataFrame(np.vstack(delta_blocks), columns=pd.Index(g))
+    key = pd.DataFrame(keys, columns=pd.Index(["patient", "drug"]))
+    return delta, key
+
+
 def build_l1000_gdsc_pairs(
     repo: Path,
     l1000_dir: Path,
