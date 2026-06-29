@@ -118,7 +118,12 @@ def main() -> None:
         else None
     )
 
-    _, design = build_sample_design(load_tranche("sarcoma", repo), "tumor", "viability")
+    # Key the Soragni target by PubChem CID: the delta sources (additive / learned /
+    # stack) all key drugs by CID, so the target must too or the merge below is empty.
+    # (The native loader sets Soragni drug_id = drug name, unlike the old CoderData ids.)
+    _, design = build_sample_design(
+        load_tranche("sarcoma", repo), "tumor", "viability", drug_key="pubchem_cid"
+    )
 
     # train cohort: real L1000 deltas -> GDSC2 AUC (for the supervised adapters and the
     # additive baseline). Keep the full delta for the additive per-drug mean; fit the
