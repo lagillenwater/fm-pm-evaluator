@@ -42,7 +42,7 @@ def main() -> None:
 
     repo = Path(__file__).resolve().parent.parent
     bundle = load_tranche("sarcoma", repo)
-    x_df, design = build_sample_design(bundle, "organoid", "viability")
+    x_df, design = build_sample_design(bundle, "tumor", "viability")
     x_expr = np.log1p(x_df)
 
     models = {

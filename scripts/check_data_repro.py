@@ -45,7 +45,7 @@ def main() -> None:
         print(f"  {pkg:10s} {version(pkg)}")
 
     bundle = load_tranche("sarcoma", repo)
-    x_df, design = build_sample_design(bundle, "organoid", "viability")
+    x_df, design = build_sample_design(bundle, "tumor", "viability")
 
     raw = repo / "data/raw/coderdata"
     print("\n-- raw download content (sha256[:16]) --")

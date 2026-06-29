@@ -52,7 +52,7 @@ SEED = 0
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--dataset", default="sarcoma")
-    ap.add_argument("--rna-source", default="organoid", choices=["all", "organoid", "tumor"])
+    ap.add_argument("--rna-source", default="tumor", choices=["all", "organoid", "tumor"])
     ap.add_argument("--n-components", type=int, default=10, help="PCs for the linear/stack probe")
     ap.add_argument(
         "--std-floor",

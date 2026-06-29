@@ -56,7 +56,7 @@ from fmharness.evaluation import build_sample_design, cpm_bundle
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--dataset", default="sarcoma")
-    ap.add_argument("--rna-source", default="organoid", choices=["all", "organoid", "tumor"])
+    ap.add_argument("--rna-source", default="tumor", choices=["all", "organoid", "tumor"])
     ap.add_argument(
         "--sarcoma-only",
         action="store_true",

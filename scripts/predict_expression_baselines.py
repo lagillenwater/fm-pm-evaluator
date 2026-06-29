@@ -105,7 +105,7 @@ def main() -> None:
         if args.signatures == "hallmark"
         else None
     )
-    _, design = build_sample_design(load_tranche("sarcoma", repo), "organoid", "viability")
+    _, design = build_sample_design(load_tranche("sarcoma", repo), "tumor", "viability")
 
     base = ad.read_h5ad(
         repo / args.baseline if not Path(args.baseline).is_absolute() else Path(args.baseline)

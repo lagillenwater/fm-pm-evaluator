@@ -32,7 +32,7 @@ def main() -> None:
     ]
     genes = pd.read_csv(repo / "data/raw/coderdata/genes.csv.gz")
     bundle = load_tranche("sarcoma", repo)
-    x_df, _ = build_sample_design(bundle, "organoid", "viability")
+    x_df, _ = build_sample_design(bundle, "tumor", "viability")
     measured = {int(c) for c in x_df.columns}
 
     panel = build_panel(genes, measured, stack)

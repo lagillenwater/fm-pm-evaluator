@@ -107,7 +107,7 @@ def main() -> None:
     repo = Path(__file__).resolve().parent.parent
     # Join GDSC2 <-> Soragni (and the fingerprint table) on PubChem CID.
     xs, ds = build_sample_design(
-        load_tranche("sarcoma", repo), "organoid", "viability", drug_key="pubchem_cid"
+        load_tranche("sarcoma", repo), "tumor", "viability", drug_key="pubchem_cid"
     )
     ctf = None if args.pan_cancer else GDSC_SARCOMA
     gbun = load_tranche("gdscv2", repo, cancer_type_filter=ctf)

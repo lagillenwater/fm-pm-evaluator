@@ -51,7 +51,7 @@ def main() -> None:
         if args.signatures == "hallmark"
         else None
     )
-    _, design = build_sample_design(load_tranche("sarcoma", repo), "organoid", "viability")
+    _, design = build_sample_design(load_tranche("sarcoma", repo), "tumor", "viability")
     p2s = soragni_pert_map(repo)
     print(f"  {len(p2s)} L1000 pert_id -> Soragni drug mappings")
 

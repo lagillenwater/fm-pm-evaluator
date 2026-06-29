@@ -222,6 +222,10 @@ def load_gdsc2_sarcoma(
                 metadata={
                     "cosmic_id": int(row["COSMICID"]),
                     "ccle_name": maybe_str(row.get("CCLEName")),
+                    # DepMap-canonical stripped name (e.g. "A375"); the cell-line
+                    # namespace L1000 wells are keyed on, so cross-dataset joins
+                    # (build_l1000_gdsc_pairs) line up on name rather than ACH id.
+                    "stripped_cell_line_name": maybe_str(row.get("StrippedCellLineName")),
                     "sanger_model_id": maybe_str(row.get("SangerModelID")),
                 },
             )

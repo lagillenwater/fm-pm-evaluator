@@ -7,10 +7,19 @@ viability-adapter runner use one code path (no drift):
   is imported lazily, so importing this module never requires it (Alpine only).
 - ``build_generated_deltas`` -- Stack-generated treated profiles minus the organoid
   baseline, per (organoid, drug). The target cohort. AnnData only.
+- ``build_additive_deltas`` -- the non-Stack baseline delta source: each drug's mean
+  real L1000 treated-minus-DMSO delta, applied to every organoid (organoid-independent).
+  The generation analogue of the drug-mean baseline, so Stack's organoid-specific
+  generated delta is compared against "the drug does the same thing everywhere."
+- ``build_learned_deltas`` -- PCA/NMF organoid-specific delta predictors: a linear
+  baseline -> delta-residual map learned on real L1000, applied to each organoid's
+  baseline. The generation analogue of the expression baselines, between the additive
+  floor and Stack.
 
-Both return a delta frame (rows = samples, columns = gene symbols) plus a key frame
+All return a delta frame (rows = samples, columns = gene symbols) plus a key frame
 (``patient``, ``drug``) aligned row-for-row, ready for ``score_signatures`` or the
-viability adapters.
+viability adapters -- so any delta source flows through the same readout adapters and
+metrics, and the comparison is delta-source vs delta-source on equal footing.
 """
 
 from __future__ import annotations
@@ -23,6 +32,9 @@ from typing import cast
 import anndata as ad
 import numpy as np
 import pandas as pd
+from sklearn.decomposition import NMF, PCA
+from sklearn.linear_model import Ridge
+from sklearn.preprocessing import StandardScaler
 
 from fmharness.data.loaders import load_tranche
 from fmharness.evaluation import build_sample_design
@@ -98,7 +110,7 @@ def soragni_pert_map(repo: Path) -> dict[str, str]:
     pert = pd.read_csv(cache, sep="\t", low_memory=False)
     dr = pd.read_csv(repo / "data/raw/coderdata/sarcoma_drugs.tsv.gz", sep="\t")
     _, ds = build_sample_design(
-        load_tranche("sarcoma", repo), "organoid", "viability", drug_key="pubchem_cid"
+        load_tranche("sarcoma", repo), "tumor", "viability", drug_key="pubchem_cid"
     )
     soragni_cids = [str(d) for d in ds["drug"]]
     dr_cid = dr["pubchem_id"].map(lambda c: str(int(c)) if pd.notna(c) else None)
@@ -172,6 +184,116 @@ def build_generated_deltas(
     return delta, key
 
 
+def build_additive_deltas(
+    l1000_delta: pd.DataFrame,
+    l1000_key: pd.DataFrame,
+    patients: list[str],
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Non-Stack baseline: each drug's mean L1000 delta, broadcast to every organoid.
+
+    Takes real L1000 treated-minus-DMSO deltas (``build_l1000_gdsc_pairs``) and their
+    ``(patient, drug)`` key, averages the delta over cell lines per drug, then assigns
+    that single per-drug delta to every organoid in ``patients`` -- so the predicted
+    delta is organoid-independent. This is the generation analogue of the drug-mean
+    baseline: it carries the drug's main transcriptional effect but no organoid x drug
+    interaction, the floor Stack's generated delta must beat. Returns ``(delta[pairs x
+    genes], key[patient, drug])`` in the same shape as ``build_generated_deltas``.
+    """
+    drug_mean = l1000_delta.groupby(l1000_key["drug"].to_numpy()).mean()
+    drugs = np.asarray(drug_mean.index, dtype=object)
+    pats = np.asarray([str(p) for p in patients], dtype=object)
+    n_p = len(pats)
+    # each drug's delta repeated once per organoid; keys tile organoids within drug.
+    delta = pd.DataFrame(np.repeat(drug_mean.to_numpy(), n_p, axis=0), columns=drug_mean.columns)
+    key = pd.DataFrame(
+        {"patient": np.tile(pats, len(drugs)), "drug": np.repeat(drugs, n_p)},
+    )
+    return delta, key
+
+
+def build_learned_deltas(
+    train_base: pd.DataFrame,
+    train_delta: pd.DataFrame,
+    train_key: pd.DataFrame,
+    target_base: pd.DataFrame,
+    patients: list[str],
+    *,
+    reducer: str = "pca",
+    k: int = 20,
+    alpha: float = 1.0,
+    seed: int = 0,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Organoid-specific delta predictor -- the generation analogue of the expression
+    baselines, sitting between the additive floor and Stack.
+
+    Learns a baseline -> delta map on real L1000: reduce each training cell line's DMSO
+    baseline by PCA/NMF, regress (ridge) the treated-minus-DMSO delta *residual* (delta
+    minus the per-drug mean) on those components, then predict each Soragni organoid's
+    correction from its own baseline. The prediction is
+    ``delta(organoid, drug) = drug_mean[drug] + correction(organoid)`` -- organoid-
+    specific (so it can express within-drug interaction) but driven by a simple linear
+    map. The correction transfers across the L1000<->Soragni platform gap in standardized
+    units (PCA z-scores per cohort; NMF clips to non-negative). Returns ``(delta[pairs x
+    genes], key[patient, drug])`` in the same shape as the other delta sources.
+    """
+    if reducer not in ("pca", "nmf"):
+        raise ValueError("reducer must be 'pca' or 'nmf'")
+    g = sorted(
+        {str(c) for c in train_base.columns}
+        & {str(c) for c in train_delta.columns}
+        & {str(c) for c in target_base.columns}
+    )
+    if not g:
+        raise ValueError("no shared genes among train_base, train_delta, target_base")
+
+    drug_mean = train_delta[g].groupby(train_key["drug"].to_numpy()).mean()  # drug x gene
+    resid = train_delta[g].to_numpy(dtype=np.float64) - drug_mean.loc[train_key["drug"]].to_numpy(
+        dtype=np.float64
+    )
+
+    cells = train_base[g]
+    k_eff = max(1, min(k, len(cells) - 1, len(g)))
+    tgt = np.nan_to_num(target_base.reindex(columns=g).to_numpy(dtype=np.float64))
+    if reducer == "nmf":
+        # sklearn-stubs mis-types n_components as str; the API takes an int.
+        red = NMF(n_components=k_eff, init="nndsvda", random_state=seed, max_iter=2000)  # type: ignore[arg-type]
+        z_cell = red.fit_transform(np.maximum(cells.to_numpy(dtype=np.float64), 0.0))
+        z_org = red.transform(np.maximum(tgt, 0.0))
+    else:
+        sc = StandardScaler().fit(cells.to_numpy(dtype=np.float64))
+        pca = PCA(n_components=k_eff, random_state=seed)
+        z_cell = pca.fit_transform(sc.transform(cells.to_numpy(dtype=np.float64)))
+        z_org = pca.transform(sc.transform(tgt))
+
+    z_cell_df = pd.DataFrame(z_cell, index=pd.Index([str(c) for c in cells.index]))
+    pair_feat = z_cell_df.reindex([str(p) for p in train_key["patient"]]).to_numpy()
+    ok = ~np.isnan(pair_feat).any(axis=1)  # drop pairs whose cell-line baseline is missing
+    model = Ridge(alpha=alpha).fit(pair_feat[ok], resid[ok])
+
+    z_org_df = pd.DataFrame(z_org, index=pd.Index([str(o) for o in target_base.index]))
+    pats = [str(p) for p in patients]
+    z_use = z_org_df.reindex(pats)
+    keep = np.atleast_1d(~z_use.isna().to_numpy().any(axis=1))
+    pats_keep = [p for p, kp in zip(pats, keep, strict=True) if kp]
+    if not pats_keep:
+        raise ValueError("no target organoids have a usable baseline")
+    correction = model.predict(z_use[keep].to_numpy())  # (n_keep, gene), organoid-specific
+
+    drugs = np.asarray(drug_mean.index, dtype=object)
+    n_p = len(pats_keep)
+    dm = drug_mean.to_numpy(dtype=np.float64)  # (drug, gene)
+    # delta(drug i, organoid j) = drug_mean[i] + correction[j]; rows are drug-major.
+    delta_mat = np.repeat(dm, n_p, axis=0) + np.tile(correction, (len(drugs), 1))
+    delta = pd.DataFrame(delta_mat, columns=pd.Index(g))
+    key = pd.DataFrame(
+        {
+            "patient": np.tile(np.asarray(pats_keep, dtype=object), len(drugs)),
+            "drug": np.repeat(drugs, n_p),
+        }
+    )
+    return delta, key
+
+
 def build_l1000_gdsc_pairs(
     repo: Path,
     l1000_dir: Path,
@@ -181,13 +303,14 @@ def build_l1000_gdsc_pairs(
     chunk: int = 2000,
     treated_cap: int = 8,
     dmso_cap: int = 60,
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Real L1000 treated-minus-DMSO deltas paired with GDSC2 AUC on shared
     (cell line, drug) pairs.
 
     Returns ``(delta[pairs x gene symbols], key[patient, drug], gdsc_design[patient,
-    drug, y])``. Caps replicates and reads the ``.gctx`` in column chunks so memory is
-    bounded; ``cmapPy`` is imported here (Alpine only)."""
+    drug, y], baseline[cell line x gene symbols])`` -- the last is the per-cell-line DMSO
+    baseline for the learned delta predictors. Caps replicates and reads the ``.gctx`` in
+    column chunks so memory is bounded; ``cmapPy`` is imported here (Alpine only)."""
     from cmapPy.pandasGEXpress.parse_gctx import parse  # type: ignore  # Alpine-only dep
 
     pert = pd.read_csv(
@@ -197,11 +320,19 @@ def build_l1000_gdsc_pairs(
         l1000_dir / "GSE92742_Broad_LINCS_inst_info.txt.gz", sep="\t", low_memory=False
     )
     gene = pd.read_csv(l1000_dir / "GSE92742_Broad_LINCS_gene_info.txt.gz", sep="\t")
-    xg, dg = build_sample_design(load_tranche("gdscv2", repo), "all", "auc", drug_key="pubchem_cid")
+    gb = load_tranche("gdscv2", repo)
+    xg, dg = build_sample_design(gb, "all", "auc", drug_key="pubchem_cid")
     gdr = pd.read_csv(repo / "data/raw/coderdata/gdscv2_drugs.tsv.gz", sep="\t")
     _, pert2drug = drug_pert_maps(gdr, pert)
 
-    gcell = {_norm(c): str(c) for c in xg.index}
+    # GDSC2 samples are keyed by DepMap ModelID (ACH-...); L1000 wells are keyed by
+    # cell-line name (e.g. "A375"). Map each ACH id to its stripped cell-line name so
+    # the cohorts join on the shared name namespace -- xg.index is ACH ids, so a
+    # direct name match would be empty.
+    ach2name = {
+        str(p.patient_id): str(p.metadata.get("stripped_cell_line_name") or "") for p in gb.patients
+    }
+    gcell = {_norm(ach2name[str(c)]): str(c) for c in xg.index if ach2name.get(str(c))}
     lcell = {_norm(c): str(c) for c in inst["cell_id"].unique()}
     shared = set(gcell) & set(lcell)
     l_ids = [lcell[k] for k in shared]
@@ -271,4 +402,13 @@ def build_l1000_gdsc_pairs(
             "drug": pd.Series(perts).map(pert2drug).to_numpy(),
         }
     )
-    return delta, key, cast("pd.DataFrame", dg)
+    # per-cell-line DMSO baseline (gene symbols, GDSC2-name index) for the learned
+    # delta predictors; same gene mapping / dedup as the delta.
+    base = pd.DataFrame(
+        dmean.to_numpy(),
+        index=pd.Index([str(l_to_g.get(str(c), str(c))) for c in dmean.index]),
+        columns=pd.Index([str(sym.get(int(i), "")) for i in dmean.columns]),
+    )
+    base = base.loc[:, [str(col) != "" for col in base.columns]]
+    base = base.loc[:, ~pd.Index(base.columns).duplicated()]
+    return delta, key, cast("pd.DataFrame", dg), base

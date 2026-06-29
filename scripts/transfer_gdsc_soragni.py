@@ -119,7 +119,7 @@ def main() -> None:
     # share one normalization -- the native loaders otherwise leave GDSC2 on
     # median-of-ratios and Soragni on CPM.
     xs, ds = build_sample_design(
-        cpm_bundle(load_tranche("sarcoma", repo)), "organoid", "viability", drug_key="pubchem_cid"
+        cpm_bundle(load_tranche("sarcoma", repo)), "tumor", "viability", drug_key="pubchem_cid"
     )
     ctf = None if args.pan_cancer else GDSC_SARCOMA
     gd = cpm_bundle(load_tranche("gdscv2", repo, cancer_type_filter=ctf))

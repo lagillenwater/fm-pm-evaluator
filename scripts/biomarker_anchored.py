@@ -116,7 +116,7 @@ def _biomarker_series(
 def main() -> None:
     repo = Path(__file__).resolve().parent.parent
     bundle = cpm_bundle(load_tranche("sarcoma", repo))
-    x_df, design = build_sample_design(bundle, "organoid", "viability")  # drug = Soragni name
+    x_df, design = build_sample_design(bundle, "tumor", "viability")  # drug = Soragni name
     x_log = np.log1p(x_df)
     sym2ent = _sym2entrez(repo)
     alt, wes = _wes_alterations(repo)
