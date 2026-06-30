@@ -16,6 +16,7 @@ from fmharness.deltas import (
     build_tahoe_deltas,
     drug_pert_maps,
     logcpm,
+    pseudobulk_de_to_deltas,
 )
 
 
@@ -212,3 +213,28 @@ def test_build_tahoe_deltas_pseudobulks_and_logfc() -> None:
     for p in ("ACH-1", "CVCL_2"):
         row = delta[key["patient"].to_numpy() == p].to_numpy()[0]
         assert np.allclose(row, trt_lc.loc[p].to_numpy() - base_lc.loc[p].to_numpy())
+
+
+def test_pseudobulk_de_to_deltas_pools_doses_and_rekeys() -> None:
+    # ACH-1 has two doses (logFC A: 1,3 -> mean 2; B: -1,-3 -> mean -2), ACH-2 one; the
+    # 'other' drug row maps to no CID and is dropped from both the delta and the baseline.
+    de = pd.DataFrame(
+        {
+            "gene_name": ["A", "B", "A", "B", "A", "B", "A"],
+            "log2FoldChange": [1.0, -1.0, 3.0, -3.0, 2.0, 0.0, 9.0],
+            "baseMean": [10.0, 20.0, 10.0, 20.0, 5.0, 5.0, 1.0],
+            "Cell_ID_DepMap": ["ACH-1", "ACH-1", "ACH-1", "ACH-1", "ACH-2", "ACH-2", "ACH-2"],
+            "drug": ["drugX", "drugX", "drugX", "drugX", "drugX", "drugX", "other"],
+        }
+    )
+    delta, key, base = pseudobulk_de_to_deltas(de, {"drugX": "555"})
+
+    assert set(map(tuple, key.to_numpy())) == {("ACH-1", "555"), ("ACH-2", "555")}
+    assert list(delta.columns) == ["A", "B"]
+    i1 = key.index[(key["patient"] == "ACH-1") & (key["drug"] == "555")][0]
+    assert np.allclose(delta.loc[i1].to_numpy(), [2.0, -2.0])  # pooled over the two doses
+    i2 = key.index[(key["patient"] == "ACH-2") & (key["drug"] == "555")][0]
+    assert np.allclose(delta.loc[i2].to_numpy(), [2.0, 0.0])  # 'other'-drug logFC 9.0 excluded
+    # baseline = mean baseMean per line per gene; the dropped 'other' row does not affect ACH-2/A
+    assert np.allclose(base.loc["ACH-1"].to_numpy(), [10.0, 20.0])
+    assert np.allclose(base.loc["ACH-2"].to_numpy(), [5.0, 5.0])

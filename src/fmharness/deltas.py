@@ -574,3 +574,50 @@ def build_tahoe_deltas(
     )
     key = pd.DataFrame({"patient": tpat[keep], "drug": tdrug[keep]})
     return delta, key, base
+
+
+def pseudobulk_de_to_deltas(
+    de: pd.DataFrame,
+    name_to_cid: dict[str, str],
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Real per-(line, drug) deltas + per-line baseline from Tahoe's pseudobulk DESeq2 table.
+
+    The streaming-free shortcut to ``build_tahoe_deltas``: Tahoe ships a
+    ``pseudobulk_differential_expression`` table (per cell line x drug x dose x plate, per gene)
+    carrying ``log2FoldChange`` (treated vs DMSO) and ``baseMean``. This aggregates it to the same
+    ``(delta, key, baseline)`` contract -- delta = mean ``log2FoldChange`` per (DepMap line, drug)
+    pooled over dose and plate; baseline = mean ``baseMean`` per line (a proxy for the line's
+    expression profile, used only to choose k-NN neighbors). The drug is re-keyed from Tahoe's
+    name to its PubChem CID via ``name_to_cid`` (names without a CID are dropped). The log2 scale
+    and the baseMean proxy are harmless downstream: delta_fidelity is correlation-based and the
+    readouts z-score the delta.
+
+    ``de`` needs columns ``gene_name, log2FoldChange, baseMean, Cell_ID_DepMap, drug``. Returns
+    ``(delta[pairs x genes], key[patient, drug], baseline[line x genes])``.
+    """
+    d = de.loc[:, ["gene_name", "log2FoldChange", "baseMean", "Cell_ID_DepMap", "drug"]].copy()
+    d["drug"] = d["drug"].astype(str).map(name_to_cid)
+    d["patient"] = d["Cell_ID_DepMap"].astype(str)
+    d = d[d["drug"].notna()]
+    if d.empty:
+        raise ValueError("no pseudobulk rows mapped to a target drug CID")
+
+    # mean over dose/plate -> one delta per (line, drug); baseMean -> one baseline per line.
+    delta_wide = d.pivot_table(
+        index=["patient", "drug"], columns="gene_name", values="log2FoldChange", aggfunc="mean"
+    ).fillna(0.0)
+    base = d.pivot_table(
+        index="patient", columns="gene_name", values="baseMean", aggfunc="mean"
+    ).fillna(0.0)
+
+    key = pd.DataFrame(
+        {
+            "patient": [str(p) for p in delta_wide.index.get_level_values(0)],
+            "drug": [str(x) for x in delta_wide.index.get_level_values(1)],
+        }
+    )
+    delta = delta_wide.reset_index(drop=True)
+    delta.columns = pd.Index([str(c) for c in delta.columns])
+    base.columns = pd.Index([str(c) for c in base.columns])
+    base.index = pd.Index([str(i) for i in base.index])
+    return delta, key, base

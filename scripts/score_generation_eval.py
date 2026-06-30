@@ -73,7 +73,12 @@ def _loo_baseline_source(
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--context", required=True, help="Tahoe context AnnData (build_tahoe_context)")
+    ap.add_argument("--context", default=None, help="Tahoe context AnnData (build_tahoe_context)")
+    ap.add_argument(
+        "--deltas-bundle",
+        default=None,
+        help="dir with real_delta/real_key/base parquet (build_tahoe_pseudobulk_deltas shortcut)",
+    )
     ap.add_argument("--auc-tranche", default="gdscv2", help="measured-AUC cohort for check 2")
     ap.add_argument("--k", type=int, default=10, help="neighbors for the k-NN source")
     ap.add_argument("--n-hvg", type=int, default=2000, help="top HVGs for the generation metric")
@@ -81,8 +86,17 @@ def main() -> None:
     args = ap.parse_args()
     repo = Path(__file__).resolve().parent.parent
 
-    ctx = Path(args.context) if Path(args.context).is_absolute() else repo / args.context
-    real_delta, real_key, base = build_tahoe_deltas(ad.read_h5ad(ctx))
+    if args.deltas_bundle:
+        bdir = Path(args.deltas_bundle)
+        bdir = bdir if bdir.is_absolute() else repo / bdir
+        real_delta = pd.read_parquet(bdir / "real_delta.parquet")
+        real_key = pd.read_parquet(bdir / "real_key.parquet")
+        base = pd.read_parquet(bdir / "base.parquet")
+    elif args.context:
+        ctx = Path(args.context) if Path(args.context).is_absolute() else repo / args.context
+        real_delta, real_key, base = build_tahoe_deltas(ad.read_h5ad(ctx))
+    else:
+        ap.error("provide --context (single-cell) or --deltas-bundle (pseudobulk shortcut)")
     print(
         f"Tahoe: {len(real_key)} (line, drug) pairs over {base.shape[0]} lines, "
         f"{real_delta.shape[1]} genes"

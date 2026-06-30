@@ -11,9 +11,10 @@ call and the delta builders consume it unchanged. Treated and DMSO cells are tag
 per-line baseline (is_control) and the real treated state (the truth for generation-quality)
 are both slices of this one file -- no separate query/baseline build needed for cell lines.
 
-Run on Alpine (needs ``datasets``; streams from HF so no full ~100M-cell download):
-  python scripts/build_tahoe_context.py --drugs-cid 5330286 11707110 --dose-um 5 \\
-      --out tahoe_context.h5ad
+Run on Alpine (needs ``datasets``; streams from HF so no full ~100M-cell download). It still
+full-scans the stream, so ``--max-cells-per-cond`` caps cells per (line, drug) to bound memory:
+  python scripts/build_tahoe_context.py --drugs-cid-file data/static/gdsc2_auc_pubchem_cids.txt \\
+      --max-cells-per-cond 200 --out tahoe_context.h5ad
 then generate (same call shape as the L1000 path, with the Tahoe context as base-adata):
   stack-generation --checkpoint stack-aligned/bc_large_aligned.ckpt \\
       --base-adata tahoe_context.h5ad --test-adata stack_input_sarcoma.h5ad \\
@@ -43,9 +44,20 @@ def main() -> None:
         "--drugs-cid", nargs="*", default=None, help="PubChem CIDs to keep (default all)"
     )
     ap.add_argument(
+        "--drugs-cid-file",
+        default=None,
+        help="file of PubChem CIDs (whitespace/newline-separated); merged with --drugs-cid",
+    )
+    ap.add_argument(
         "--cell-lines", nargs="*", default=None, help="Cellosaurus cell_line_ids (default all)"
     )
     ap.add_argument("--dose-um", type=float, default=None, help="keep only this drug dose in uM")
+    ap.add_argument(
+        "--max-cells-per-cond",
+        type=int,
+        default=None,
+        help="subsample cap on cells kept per (cell line, drug); bounds memory (default no cap)",
+    )
     ap.add_argument("--out", default="tahoe_context.h5ad")
     ap.add_argument(
         "--batch", type=int, default=50000, help="cells scattered per chunk (bounds memory)"
@@ -82,8 +94,13 @@ def main() -> None:
         for s, c in zip(sm["sample"], sm["drugname_drugconc"], strict=False)
     }
 
-    cids = set(map(str, args.drugs_cid)) if args.drugs_cid else None
+    cids = set(map(str, args.drugs_cid)) if args.drugs_cid else set()
+    if args.drugs_cid_file:
+        cids |= {tok for tok in Path(args.drugs_cid_file).read_text().split() if tok}
+    keep_cids: set[str] | None = cids or None
     lines = set(args.cell_lines) if args.cell_lines else None
+    cap = args.max_cells_per_cond
+    cond_count: dict[tuple[str, str], int] = {}
     stream = load_dataset(TAHOE, "expression_data", split="train", streaming=True)
 
     g_acc: list[np.ndarray] = []
@@ -99,13 +116,18 @@ def main() -> None:
 
     for r in stream:
         is_ctl = r["drug"] == DMSO
-        if cids is not None and not is_ctl and str(r["pubchem_cid"]) not in cids:
+        if keep_cids is not None and not is_ctl and str(r["pubchem_cid"]) not in keep_cids:
             continue
         if lines is not None and r["cell_line_id"] not in lines:
             continue
         dose = sample_dose.get(str(r["sample"]), float("nan"))
         if args.dose_um is not None and not is_ctl and not np.isclose(dose, args.dose_um):
             continue
+        if cap is not None:
+            ckey = (str(r["cell_line_id"]), str(r["drug"]))
+            if cond_count.get(ckey, 0) >= cap:
+                continue
+            cond_count[ckey] = cond_count.get(ckey, 0) + 1
         g_acc.append(r["genes"])
         e_acc.append(r["expressions"])
         obs_rows.append(
