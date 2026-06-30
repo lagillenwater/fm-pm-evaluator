@@ -13,6 +13,7 @@ from fmharness.l1000 import (
     build_generated_deltas,
     build_knn_deltas,
     build_learned_deltas,
+    build_tahoe_deltas,
     drug_pert_maps,
     logcpm,
 )
@@ -165,3 +166,56 @@ def test_build_knn_deltas_picks_nearest_line() -> None:
     # determinism: identical inputs -> identical output
     d2, _ = build_knn_deltas(train_base, train_delta, train_key, target_base, ["o1", "o2"], k=1)
     assert np.allclose(delta.to_numpy(), d2.to_numpy())
+
+
+def test_build_tahoe_deltas_pseudobulks_and_logfc() -> None:
+    # two cell lines, one drug (CID 100) + DMSO, a few single cells each. The real delta is
+    # the log fold-change of the (line, drug) treated pseudobulk vs the line's DMSO pseudobulk.
+    genes = ["A", "B", "C"]
+    x = np.array(
+        [
+            [10.0, 0.0, 0.0],  # ACH-1 DMSO
+            [20.0, 0.0, 0.0],  # ACH-1 DMSO   -> control mean [15, 0, 0]
+            [0.0, 10.0, 0.0],  # ACH-1 CID100
+            [0.0, 30.0, 0.0],  # ACH-1 CID100 -> treated mean [0, 20, 0]
+            [0.0, 0.0, 10.0],  # ACH-2 DMSO   -> control mean [0, 0, 10]; cell_id empty
+            [5.0, 5.0, 0.0],  # ACH-2 CID100 -> treated mean [5, 5, 0]
+        ],
+        dtype=np.float32,
+    )
+    obs = pd.DataFrame(
+        {
+            "cell_id": ["ACH-1", "ACH-1", "ACH-1", "ACH-1", "", ""],  # last line: no DepMap id
+            "cell_line_id": ["CVCL_1", "CVCL_1", "CVCL_1", "CVCL_1", "CVCL_2", "CVCL_2"],
+            "pubchem_cid": ["0", "0", "100", "100", "0", "100"],
+            "is_control": [True, True, False, False, True, False],
+        }
+    )
+    adata = ad.AnnData(X=x, obs=obs)
+    adata.var_names = genes
+
+    delta, key, base = build_tahoe_deltas(adata)
+
+    # baseline = raw pseudobulk mean per line; ACH-2 falls back to its cell_line_id.
+    assert set(base.index) == {"ACH-1", "CVCL_2"}
+    assert np.allclose(base.loc["ACH-1"].to_numpy(), [15.0, 0.0, 0.0])
+    assert np.allclose(base.loc["CVCL_2"].to_numpy(), [0.0, 0.0, 10.0])
+
+    # one row per (line, drug), drug keyed by PubChem CID.
+    assert set(map(tuple, key.to_numpy())) == {("ACH-1", "100"), ("CVCL_2", "100")}
+    assert list(delta.columns) == genes
+
+    # delta is logcpm(treated) - logcpm(line's own DMSO), computed via the shared logcpm.
+    base_lc = logcpm(
+        pd.DataFrame(
+            [[15.0, 0, 0], [0, 0, 10.0]], index=["ACH-1", "CVCL_2"], columns=pd.Index(genes)
+        )
+    )
+    trt_lc = logcpm(
+        pd.DataFrame(
+            [[0, 20.0, 0], [5.0, 5.0, 0]], index=["ACH-1", "CVCL_2"], columns=pd.Index(genes)
+        )
+    )
+    for p in ("ACH-1", "CVCL_2"):
+        row = delta[key["patient"].to_numpy() == p].to_numpy()[0]
+        assert np.allclose(row, trt_lc.loc[p].to_numpy() - base_lc.loc[p].to_numpy())

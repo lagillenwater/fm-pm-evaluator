@@ -32,6 +32,7 @@ from typing import cast
 import anndata as ad
 import numpy as np
 import pandas as pd
+from scipy import sparse
 from sklearn.decomposition import NMF, PCA
 from sklearn.linear_model import Ridge
 from sklearn.preprocessing import StandardScaler
@@ -488,3 +489,88 @@ def build_l1000_gdsc_pairs(
     base = base.loc[:, [str(col) != "" for col in base.columns]]
     base = base.loc[:, ~pd.Index(base.columns).duplicated()]
     return delta, key, cast("pd.DataFrame", dg), base
+
+
+def _group_mean(x: sparse.csr_matrix, codes: np.ndarray, n_groups: int) -> np.ndarray:
+    """Per-group mean of the rows of ``x`` (cells x genes, CSR), vectorized via an indicator
+    matmul -- no per-group loop and no densifying the full cell matrix.
+
+    ``codes`` are integer group ids in ``[0, n_groups)`` aligned to the rows of ``x``.
+    """
+    n = cast("tuple[int, int]", x.shape)[0]
+    g = sparse.csr_matrix(
+        (np.ones(n, dtype=np.float64), (codes, np.arange(n))),
+        shape=(n_groups, n),
+    )
+    sums = dense(g @ x)  # (n_groups x genes)
+    counts = np.asarray(g.sum(axis=1)).ravel()
+    counts[counts == 0] = 1.0
+    return sums / counts[:, None]
+
+
+def build_tahoe_deltas(
+    adata: ad.AnnData,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Real pseudobulk treated-minus-DMSO deltas + per-line baseline from a Tahoe context.
+
+    Aggregates the single cells of a ``build_tahoe_context`` AnnData to a pseudobulk profile
+    per (cell line, drug) treated condition and per (cell line) DMSO control, then returns the
+    log-fold-change ``delta = logcpm(treated) - logcpm(control)`` over the gene panel. This is
+    the in-domain "truth" for generation quality (compare a generated delta to it) and the
+    real-delta source the additive / k-NN baselines consume -- the Tahoe analogue of
+    ``build_l1000_gdsc_pairs``, on the same ``logcpm`` log-fold-change scale so any source is
+    comparable.
+
+    The cell line is keyed by its DepMap id (obs ``cell_id``; falls back to ``cell_line_id``
+    when empty), the drug by PubChem CID (obs ``pubchem_cid``) -- the canonical cross-dataset
+    keys the viability join and the designs use. Returns ``(delta[pairs x genes], key[patient,
+    drug], baseline[line x genes])``; ``baseline`` is the raw pseudobulk mean (counts), since
+    the delta predictors expect a baseline expression profile, not a log fold-change.
+    """
+    obs = adata.obs
+    genes = pd.Index([str(v) for v in adata.var_names])
+    cid = obs["cell_id"].astype(str).to_numpy()
+    cln = obs["cell_line_id"].astype(str).to_numpy()
+    patient = np.where((cid != "") & (cid != "nan"), cid, cln)
+    drug = obs["pubchem_cid"].astype(str).to_numpy()
+    is_ctl = obs["is_control"].to_numpy(dtype=bool)
+    x = adata.X
+    xc = cast(
+        "sparse.csr_matrix",
+        x if sparse.issparse(x) else sparse.csr_matrix(np.asarray(x, dtype=np.float64)),
+    )
+
+    ctl = np.flatnonzero(is_ctl)
+    trt = np.flatnonzero(~is_ctl)
+    if ctl.size == 0:
+        raise ValueError("no DMSO control cells (is_control) in the Tahoe context")
+    if trt.size == 0:
+        raise ValueError("no treated cells in the Tahoe context")
+
+    # control pseudobulk per cell line (drug-agnostic).
+    ccodes, cuniq = pd.factorize(patient[ctl])
+    base = pd.DataFrame(
+        _group_mean(xc[ctl], ccodes, len(cuniq)),
+        index=pd.Index([str(u) for u in cuniq]),
+        columns=genes,
+    )
+
+    # treated pseudobulk per (cell line, drug); a NUL-joined key keeps the pair atomic.
+    tkey = pd.Series(patient[trt]).str.cat(pd.Series(drug[trt]), sep="\x1f").to_numpy()
+    tcodes, tuniq = pd.factorize(tkey)
+    tmean = _group_mean(xc[trt], tcodes, len(tuniq))
+    parts = pd.Series(tuniq).str.split("\x1f", expand=True)
+    tpat, tdrug = parts[0].to_numpy(), parts[1].to_numpy()
+
+    # log fold-change vs each line's own DMSO baseline; drop pairs with no baseline.
+    base_lc = logcpm(base)
+    trt_lc = logcpm(pd.DataFrame(tmean, index=pd.Index(tpat), columns=genes))
+    keep = np.asarray(pd.Index(tpat).isin(base_lc.index))
+    if not keep.any():
+        raise ValueError("no treated (line, drug) pair has a matching DMSO baseline")
+    delta = pd.DataFrame(
+        trt_lc.to_numpy()[keep] - base_lc.reindex(tpat[keep]).to_numpy(),
+        columns=genes,
+    )
+    key = pd.DataFrame({"patient": tpat[keep], "drug": tdrug[keep]})
+    return delta, key, base
