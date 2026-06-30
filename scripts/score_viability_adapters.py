@@ -30,44 +30,16 @@ import numpy as np
 import pandas as pd
 
 from fmharness.adapters import ALL_METHODS, build_adapters
-from fmharness.controls import permute_within_drug
 from fmharness.data.loaders import load_tranche
-from fmharness.evaluation import (
-    build_sample_design,
-    global_spearman,
-    interaction_rho,
-    regret_norm_at_k,
-)
-from fmharness.l1000 import (
+from fmharness.deltas import (
     build_additive_deltas,
     build_generated_deltas,
     build_l1000_gdsc_pairs,
     build_learned_deltas,
     soragni_pert_map,
 )
+from fmharness.evaluation import build_sample_design, score_predictions
 from fmharness.signatures import load_hallmark
-
-SEED = 0
-
-
-def _score(preds: pd.DataFrame, n_perm: int) -> tuple[float, float, float, dict[int, float]]:
-    """global rho, interaction rho, within-drug label-permutation p, regret@k dict."""
-    gl = global_spearman(preds)
-    it = interaction_rho(preds, "y_pred")
-    null = np.array(
-        [
-            interaction_rho(
-                preds.assign(
-                    y_true=permute_within_drug(
-                        preds["drug"], preds["y_true"], np.random.default_rng(SEED + 1 + b)
-                    )
-                ),
-                "y_pred",
-            )
-            for b in range(n_perm)
-        ]
-    )
-    return gl, it, float(np.mean(null >= it)), regret_norm_at_k(preds)
 
 
 def _read_baseline(path: Path) -> pd.DataFrame:
@@ -192,17 +164,17 @@ def main() -> None:
                     "y_pred": -merged["_sens"].to_numpy(),
                 }
             )
-            gl, it, pv, regret = _score(preds, args.n_permutations)
+            s = score_predictions(preds, n_perm=args.n_permutations)
             out.append(
                 {
                     "source": src_name,
                     "method": adapter.name,
-                    "global": round(gl, 3),
-                    "interaction": round(it, 3),
-                    "p_label": round(pv, 3),
-                    "regret@1": round(regret.get(1, float("nan")), 3),
-                    "regret@3": round(regret.get(3, float("nan")), 3),
-                    "n": len(preds),
+                    "global": s["global"],
+                    "interaction": s["interaction"],
+                    "p_label": s["p_label"],
+                    "regret@1": s["regret@1"],
+                    "regret@3": s["regret@3"],
+                    "n": int(s["n"]),
                 }
             )
 

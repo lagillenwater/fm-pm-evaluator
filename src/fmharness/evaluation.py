@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import dataclasses
 from collections.abc import Callable
+from typing import cast
 
 import numpy as np
 import pandas as pd
@@ -222,6 +223,43 @@ def regret_norm_at_k(preds: pd.DataFrame, ks: tuple[int, ...] = (1, 3, 5)) -> di
             topk = order[:k]
             acc[k].append((float(yt[topk].min()) - best) / rng)
     return {k: (float(np.mean(v)) if v else float("nan")) for k, v in acc.items()}
+
+
+def score_predictions(
+    preds: pd.DataFrame, *, n_perm: int = 1000, seed: int = 0
+) -> dict[str, float]:
+    """Score a predictions frame (patient, drug, y_true, y_pred; AUC-like, lower = better).
+
+    One place for the composition the eval scripts share: global Spearman, the headline
+    interaction rho (organoid x drug), its within-drug label-permutation p-value, and
+    normalized regret@{1,3}. Returns a flat dict of floats (``n`` is the pair count)."""
+    from fmharness.controls import permute_within_drug  # local import: avoid an import cycle
+
+    it = interaction_rho(preds, "y_pred")
+    null = np.array(
+        [
+            interaction_rho(
+                preds.assign(
+                    y_true=permute_within_drug(
+                        cast("pd.Series", preds["drug"]),
+                        cast("pd.Series", preds["y_true"]),
+                        np.random.default_rng(seed + 1 + b),
+                    )
+                ),
+                "y_pred",
+            )
+            for b in range(n_perm)
+        ]
+    )
+    regret = regret_norm_at_k(preds)
+    return {
+        "global": round(global_spearman(preds), 3),
+        "interaction": round(it, 3),
+        "p_label": round(float(np.mean(null >= it)), 3),
+        "regret@1": round(regret.get(1, float("nan")), 3),
+        "regret@3": round(regret.get(3, float("nan")), 3),
+        "n": float(len(preds)),
+    }
 
 
 def _row_corr(a: np.ndarray, b: np.ndarray) -> np.ndarray:

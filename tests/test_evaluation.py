@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from fmharness.evaluation import delta_fidelity, regret_norm_at_k
+from fmharness.evaluation import delta_fidelity, regret_norm_at_k, score_predictions
 
 
 def test_regret_norm_at_k() -> None:
@@ -60,3 +60,23 @@ def test_delta_fidelity_restricts_to_hvgs() -> None:
     key = pd.DataFrame({"patient": ["P1", "P2"], "drug": ["d", "d"]})
     out = delta_fidelity(real.copy(), key, real, key, n_hvg=2)
     assert (out["n_genes"] == 2).all()
+
+
+def test_score_predictions_reports_interaction_and_null() -> None:
+    # perfect predictions (y_pred == y_true) -> interaction rho = 1; the within-drug
+    # permutation null almost never reaches 1, so p_label is small.
+    rng = np.random.default_rng(0)
+    y = rng.normal(size=15)
+    preds = pd.DataFrame(
+        {
+            "patient": [f"P{i}" for i in range(5) for _ in range(3)],
+            "drug": ["d1", "d2", "d3"] * 5,
+            "y_true": y,
+            "y_pred": y,
+        }
+    )
+    s = score_predictions(preds, n_perm=200, seed=0)
+    assert s["interaction"] == 1.0
+    assert 0.0 <= s["p_label"] <= 0.2
+    assert s["n"] == 15.0
+    assert "regret@1" in s and "global" in s
