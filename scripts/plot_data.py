@@ -70,7 +70,7 @@ def plot_soragni_heatmap(ds, out_dir: Path) -> None:
 
 def report_l1000_coverage(ds_cid, sb, repo: Path) -> None:
     """Print which Soragni drugs have a real L1000 perturbation (a text list, no plot)."""
-    from fmharness.l1000 import soragni_pert_map
+    from fmharness.deltas import soragni_pert_map
 
     covered_cids = set(soragni_pert_map(repo).values())  # Soragni PubChem CIDs present in L1000
     cid2name = {str(a.pubchem_cid): a.drug_name for a in sb.drug_assays if a.pubchem_cid}

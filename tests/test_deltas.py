@@ -8,7 +8,7 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 
-from fmharness.l1000 import (
+from fmharness.deltas import (
     build_additive_deltas,
     build_generated_deltas,
     build_knn_deltas,
@@ -206,16 +206,9 @@ def test_build_tahoe_deltas_pseudobulks_and_logfc() -> None:
     assert list(delta.columns) == genes
 
     # delta is logcpm(treated) - logcpm(line's own DMSO), computed via the shared logcpm.
-    base_lc = logcpm(
-        pd.DataFrame(
-            [[15.0, 0, 0], [0, 0, 10.0]], index=["ACH-1", "CVCL_2"], columns=pd.Index(genes)
-        )
-    )
-    trt_lc = logcpm(
-        pd.DataFrame(
-            [[0, 20.0, 0], [5.0, 5.0, 0]], index=["ACH-1", "CVCL_2"], columns=pd.Index(genes)
-        )
-    )
+    idx = pd.Index(["ACH-1", "CVCL_2"])
+    base_lc = logcpm(pd.DataFrame([[15.0, 0, 0], [0, 0, 10.0]], index=idx, columns=pd.Index(genes)))
+    trt_lc = logcpm(pd.DataFrame([[0, 20.0, 0], [5.0, 5.0, 0]], index=idx, columns=pd.Index(genes)))
     for p in ("ACH-1", "CVCL_2"):
         row = delta[key["patient"].to_numpy() == p].to_numpy()[0]
         assert np.allclose(row, trt_lc.loc[p].to_numpy() - base_lc.loc[p].to_numpy())

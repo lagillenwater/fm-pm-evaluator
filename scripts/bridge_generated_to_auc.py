@@ -25,8 +25,8 @@ import argparse
 from pathlib import Path
 
 from fmharness.data.loaders import load_tranche
+from fmharness.deltas import build_generated_deltas, soragni_pert_map
 from fmharness.evaluation import build_sample_design
-from fmharness.l1000 import build_generated_deltas, soragni_pert_map
 from fmharness.signatures import load_hallmark, score_signatures
 
 SEED = 0

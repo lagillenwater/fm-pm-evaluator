@@ -16,7 +16,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from fmharness.l1000 import build_l1000_gdsc_pairs
+from fmharness.deltas import build_l1000_gdsc_pairs
 from fmharness.signatures import load_hallmark, score_signatures
 
 SEED = 0
