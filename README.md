@@ -1,5 +1,8 @@
 # fm-pdo-evaluator
 
+[![CI](https://github.com/lagillenwater/fm-pm-evaluator/actions/workflows/ci.yml/badge.svg)](https://github.com/lagillenwater/fm-pm-evaluator/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/lagillenwater/fm-pm-evaluator/graph/badge.svg)](https://codecov.io/gh/lagillenwater/fm-pm-evaluator)
+
 Foundation-model evaluation harness for patient-derived tumor organoid (PDTO) drug-response prediction. Realizing the benefits of foundation models requires careful evaluations that map the boundaries of generalization — and that test a model in the mode it was actually designed for.
 
 This harness evaluates the Stack single-cell foundation model in its native **prompt→query** mode: given a context of drug-treated cells (the prompt) and a patient's **tumor** transcriptome (the query), Stack-Aligned generates that patient's drug-treated state, which a transcriptional readout turns into a viability prediction. The input is the patient tumor RNA and the label is the matched **organoid** drug screen — the clinically realistic cross-substrate task, not the easy matched-organoid-RNA one. Crucially, that readout is applied to **every delta source on equal footing**, so Stack's generated response is compared head-to-head against a simple non-foundation-model baseline rather than scored in isolation. Companion code for *Prospective Evaluation of Foundation Model Performance in Precision Medicine* (greenelab/fm-pm-eval-manuscript).
