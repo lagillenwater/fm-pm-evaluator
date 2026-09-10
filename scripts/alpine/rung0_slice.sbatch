@@ -11,7 +11,9 @@
                                      # limit whatever the slice size (98G at 60G, job
                                      # 32341611_0; 75G at 40G, job 32345592_0, killed), so the
                                      # engine limit below is what keeps a task inside this
-#SBATCH --time=02:00:00              # short enough to backfill into the scheduler's gaps; a
+#SBATCH --time=03:00:00              # scratch read 3x slower on 2026-09-10 than the day before:
+                                     # the key scan took 45 min against 13, so a full-column
+                                     # scan by thirty-two readers at once needs the room
                                      # sixteenth slice took 51 min at 4 threads
 #SBATCH --array=0-31
 #SBATCH --output=logs/%x-%A_%a.out
