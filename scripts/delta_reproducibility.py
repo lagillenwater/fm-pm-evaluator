@@ -121,6 +121,14 @@ def _connect(tmp: Path, memory_limit: str = "36GB", threads: int | None = None):
     con.execute("SET preserve_insertion_order=false")
     if threads:
         con.execute(f"SET threads={int(threads)}")
+    # A scan of this table is tens of minutes with nothing printed until it returns, so from
+    # outside a job "working" and "wedged" look the same (the working notes' fourth lesson).
+    # The engine can report its own progress; in a batch log that is a percentage every few
+    # seconds per query, which is the intermediate check a long slice otherwise lacks.
+    if os.environ.get("RUNG0_PROGRESS", "1") != "0":
+        con.execute("SET enable_progress_bar=true")
+        con.execute("SET enable_progress_bar_print=true")
+        con.execute("SET progress_bar_time=10000")
     return con
 
 
