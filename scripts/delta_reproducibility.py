@@ -20,6 +20,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -85,6 +87,21 @@ def resolve_drug_names(repo: Path, args: argparse.Namespace) -> list[str] | None
     if not cid_file.exists():
         return None
     return _target_names(repo, cid_file)
+
+
+def _private_tmp(local: Path, label: str) -> Path:
+    """A spill directory this process alone writes to, under the data's scratch parent.
+
+    DuckDB names its spill files by block size, not by process, so two processes given the same
+    temp_directory overwrite each other's files. The first thirty-two-task array shared one
+    (job 32347952): tasks that spilled died reading truncated temp files, segfaulted, or read
+    another task's blocks back silently. The caller removes the directory when it is done.
+    """
+    return (
+        local.parent
+        / "duckdb_tmp"
+        / f"{label}_{os.environ.get('SLURM_JOB_ID', 'local')}_{os.getpid()}"
+    )
 
 
 def _connect(tmp: Path, memory_limit: str = "36GB", threads: int | None = None):
@@ -1499,14 +1516,18 @@ def _ensure_cached_assignment(
     if (cache_dir / ASSIGNMENT_SIDECAR).exists():
         path, _, _ = read_assignment(cache_dir)
         return path
-    assignment, pool, repl = split_assignment(
-        paths,
-        names,
-        getattr(args, "replicate_col", None),
-        local.parent / "duckdb_tmp",
-        getattr(args, "duckdb_memory", "36GB"),
-        getattr(args, "duckdb_threads", None),
-    )
+    tmp = _private_tmp(local, "assign")
+    try:
+        assignment, pool, repl = split_assignment(
+            paths,
+            names,
+            getattr(args, "replicate_col", None),
+            tmp,
+            getattr(args, "duckdb_memory", "36GB"),
+            getattr(args, "duckdb_threads", None),
+        )
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
     print(
         f"split assignment: {len(pool):,} (line, drug, dose) triples, "
         f"{int((pool['n_plates'] >= 2).sum()):,} with two or more plates; {SPLIT_RULE}"
@@ -1682,17 +1703,21 @@ def run_slice(
     if files["done"].exists():
         print(f"  slice {part + 1}/{n_parts}: already cached, skipping")
         return
-    agg, repl = slice_aggregate(
-        paths,
-        names,
-        getattr(args, "replicate_col", None),
-        local.parent / "duckdb_tmp",
-        getattr(args, "duckdb_memory", "36GB"),
-        assignment=assignment,
-        n_parts=n_parts,
-        part=part,
-        threads=getattr(args, "duckdb_threads", None),
-    )
+    tmp = _private_tmp(local, f"slice_{n_parts}_{part}")
+    try:
+        agg, repl = slice_aggregate(
+            paths,
+            names,
+            getattr(args, "replicate_col", None),
+            tmp,
+            getattr(args, "duckdb_memory", "36GB"),
+            assignment=assignment,
+            n_parts=n_parts,
+            part=part,
+            threads=getattr(args, "duckdb_threads", None),
+        )
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
     frame = frame_from_slice(agg)
     noise = noise_from_slice(agg)
     del agg

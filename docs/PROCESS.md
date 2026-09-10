@@ -129,6 +129,8 @@ A result without a `.provenance.json` provenance record is not citable in a writ
   Wall clock is one scan instead of N in a row; a task that finds its slice already cached skips, so a failed index is resubmitted alone (`--array=<index>`); and a slice count is a parameter both the array and the combine must agree on, so it lives in one place (`scripts/alpine/rung0_env.sh`).
   Prove the slicing is arithmetic with a test that runs the same fixture in one slice and in several and compares them exactly (`test_partitioned_frame_equals_one_pass`, `test_partitioned_noise_equals_one_pass`), and test the staged path against the one-process path on a fixture before submitting (`test_the_staged_run_produces_the_same_artifacts_as_one_process`).
   More slices than nodes the scheduler will give at once buys nothing: every task still reads the whole table, so past that point extra slices only lower per-task memory.
+  Give every task its own spill directory: DuckDB names its temp files by block size, not by process, and an array whose tasks shared one directory (job 32347952) lost every task that spilled to truncated or foreign blocks.
+  Alpine bills memory per core (3,840 MB), so the memory request is the core request; and a DuckDB process peaks about 35 GB above its own `memory_limit` on this table, so request the limit plus that.
 - **Verify inputs exist before submitting.**
   `ralpine ls`/`ralpine du` the files a job needs first.
 - **Pull the job's log into `results/<task-slug>/` when it finishes.**
