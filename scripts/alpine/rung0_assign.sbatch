@@ -5,11 +5,11 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=84G                    # peaked at 83G with the engine at 60G (job 32365513's
-                                     # predecessor 32341610); peak runs ~35G above the engine
-                                     # limit, so 40G below keeps it inside. Memory is billed
-                                     # per core at 3,840 MB: 84G is a 22-core job, 120G a 32
-#SBATCH --time=00:40:00              # it ran 13 min; a short limit backfills into small gaps
+#SBATCH --mem=96G                    # the engine at 60G is the only setting that has finished
+                                     # this scan (13 min, 83G peak, job 32341610); at 40G it
+                                     # did not finish in 40 min (job 32365763). Peak runs
+                                     # ~35G above the engine limit; memory is billed per core
+#SBATCH --time=01:30:00
 #SBATCH --output=logs/%x-%j.out
 #SBATCH --error=logs/%x-%j.out
 #
@@ -31,6 +31,6 @@ python scripts/delta_reproducibility.py \
     --local-dir "/scratch/alpine/$USER/tahoe_pseudobulk_de" \
     --stage assign \
     --cache-dir "$RUNG0_CACHE" \
-    --duckdb-memory 40GB \
+    --duckdb-memory 60GB \
     --duckdb-threads 4 \
     --out-dir "$OUT_DIR"
