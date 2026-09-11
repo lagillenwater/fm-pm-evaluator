@@ -131,6 +131,11 @@ def build_descriptions(
     expression = standardize_apply(e, mean_e, std_e)
 
     pca_scores, pca_loadings = pca_components(expression, k_max=20)
+    # Standardized the same way NMF's W is below, per the brief's "pca (standardized scores,
+    # L x 20)": pca_loadings stay as pca_components returns them (halves are projected onto
+    # them directly, before any restandardizing of the projected scores).
+    mean_pca, std_pca = standardize_stats(pca_scores)
+    pca_scores_std = standardize_apply(pca_scores, mean_pca, std_pca)
 
     nmf_arrays: dict[str, np.ndarray] = {}
     nmf_h_by_k: dict[int, np.ndarray] = {}
@@ -146,7 +151,7 @@ def build_descriptions(
         "lines": np.asarray(lines),
         "expression": expression,
         "expression_genes": genes,
-        "pca": pca_scores,
+        "pca": pca_scores_std,
         "pca_loadings": pca_loadings,
         **nmf_arrays,
         "random_expression": random_stand_in(n_lines, e.shape[1], RANDOM_SEEDS["expression"]),
@@ -207,7 +212,10 @@ def identity_match_tables(
     nmf_std_w_20 = fitted["nmf_std_w_20"]
 
     def describe_expression(x: np.ndarray) -> np.ndarray:
-        return x
+        # The expression description the models actually see is standardized expression
+        # (ruling 14): a half's raw log2(CPM+1) is standardized with the FULL data's column
+        # means and SDs, exactly like PCA's describe standardizes a half before projecting.
+        return standardize_apply(x, mean_e, std_e)
 
     def describe_pca(x: np.ndarray) -> np.ndarray:
         return pca_project(x, mean_e, std_e, pca_loadings)

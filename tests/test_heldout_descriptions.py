@@ -409,7 +409,10 @@ def _write_tiny_cache(cache: Path, lines: list[str], panel: list[str]) -> None:
                 "plate": ["P1"] * n_cells,
                 "key": [f"{k:016x}" for k in range(n_cells)],
                 "half": halves,
-            }
+            },
+            # A string obs index (rather than the default RangeIndex) so AnnData does not
+            # silently coerce it and warn (anndata.ImplicitModificationWarning).
+            index=[f"cell_{i}_{c}" for c in range(n_cells)],
         )
         adata = ad.AnnData(X=sparse.csr_matrix(counts_dense), obs=obs)
         adata.var_names = panel
@@ -509,6 +512,13 @@ def test_cli_writes_every_output_and_its_record(tmp_path: Path) -> None:
     assert npz["random_expression"].shape == (n_lines, n_genes)
     assert npz["random_pca"].shape == (n_lines, 20)
     assert npz["random_nmf"].shape == (n_lines, 20)
+
+    # Every stored description is standardized across lines: column means ~ 0, column SDs ~ 1
+    # (a zero-variance column would be exactly 0, but none arise for this fixture).
+    for name in ("expression", "pca", *(f"nmf_{k}" for k in (2, 5, 10, 15, 20))):
+        arr = npz[name]
+        np.testing.assert_allclose(arr.mean(axis=0), 0.0, atol=1e-8, err_msg=f"{name} mean")
+        np.testing.assert_allclose(arr.std(axis=0, ddof=0), 1.0, atol=1e-6, err_msg=f"{name} sd")
 
     tan = np.load(tanimoto_path)
     assert list(tan["drugs"]) == drugs
