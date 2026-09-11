@@ -386,13 +386,19 @@ def test_fit_recovers_planted_line_response() -> None:
     """A line hidden: a line-specific response linear in a width-20 description, planted at
     strength 0.3. The oracle's gain over the drug average is at least twice its MDE; ridge on the
     matching description gains detectably (p < 0.05) and no more than the oracle (+3 SE); ridge on
-    a random stand-in of the same width gains nothing beyond its MDE, in either direction. The
-    stand-in learns, per drug, how training lines' departures follow random numbers; the hidden
-    line's random numbers say nothing about its response."""
+    a random stand-in of the same width gains nothing beyond its MDE. The stand-in learns, per
+    drug, how training lines' departures follow random numbers; the hidden line's random numbers
+    say nothing about its response.
+
+    The check is one-sided, gain <= MDE (decisions.md, 2026-09-11 amendment): at the top penalty
+    the stand-in predicts the drug average plus a tiny fit to noise, a small steady loss with a
+    near-zero redraw spread, and a leak through a random description could only show as a gain.
+    A penalty chosen too small is caught by the null test's requirement that the stand-in's
+    penalty sit at the top."""
     control = _fit_control("lolo", seed=71)
     _assert_planted_and_recovered(control)
     random = control.random
-    assert abs(random["estimate"]) <= random["mde"], _describe(random)
+    assert random["estimate"] <= random["mde"], _describe(random)
 
 
 @pytest.mark.step_fit

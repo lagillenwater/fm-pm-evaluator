@@ -18,7 +18,8 @@ the draws:
   out).
 
 Pairs share lines and drugs, so the comparison is also redrawn over lines and drugs together
-(``two_way_estimates``); the ratio of the two redraw variances is the design effect.
+(``two_way_estimates``); the ratio of the two redraw variances is the design effect
+(``design_effect``), and its square root how much wider the interval gets (``width_ratio``).
 
 The draws run in blocks, one job each: ``N_BLOCKS`` blocks of ``DRAWS_PER_BLOCK`` draws, block
 ``b`` seeded ``base_seed + b``, concatenated in block order (``in_blocks``). Every draw comes
@@ -68,6 +69,12 @@ def _check_units(values: np.ndarray, index: np.ndarray, n_units: int, kind: str)
     if values.ndim != 1 or index.shape != values.shape:
         raise ValueError(
             f"need one {kind} index per pair: got {index.shape} for values shaped {values.shape}"
+        )
+    non_finite = int(np.count_nonzero(~np.isfinite(values)))
+    if non_finite:
+        raise ValueError(
+            f"per-pair values must be finite; {non_finite} of {values.size} are not (drop pairs "
+            "with a NaN score, for every model, before redrawing)"
         )
     if not np.issubdtype(index.dtype, np.integer):
         raise ValueError(f"{kind} indices must be integers; got {index.dtype}")
@@ -200,13 +207,29 @@ def mean_score_ci(
 
 
 def design_effect(two_way: np.ndarray, one_way: np.ndarray) -> float:
-    """How much redrawing lines and drugs together widens a comparison: the variance (``ddof=1``)
-    of its two-way redraws over the variance of its one-way redraws, NaN draws left out."""
+    """How much redrawing lines and drugs together inflates a comparison's variance: the variance
+    (``ddof=1``) of its two-way redraws over the variance of its one-way redraws, NaN draws left
+    out.
+
+    NaN, with no warning, when either set has fewer than 2 finite draws or the one-way redraws
+    do not vary (a ratio with no defined denominator).
+    """
     both = np.asarray(two_way, dtype=np.float64)
     single = np.asarray(one_way, dtype=np.float64)
-    variance_both = float(np.var(both[np.isfinite(both)], ddof=1))
-    variance_single = float(np.var(single[np.isfinite(single)], ddof=1))
-    return variance_both / variance_single
+    both, single = both[np.isfinite(both)], single[np.isfinite(single)]
+    if both.size < 2 or single.size < 2:
+        return float("nan")
+    variance_single = float(np.var(single, ddof=1))
+    if variance_single == 0.0:
+        return float("nan")
+    return float(np.var(both, ddof=1)) / variance_single
+
+
+def width_ratio(two_way: np.ndarray, one_way: np.ndarray) -> float:
+    """How much wider a comparison's interval gets when lines and drugs are redrawn together: the
+    ratio of the two-way to the one-way redraw standard deviations, ``sqrt(design_effect)``. NaN
+    whenever ``design_effect`` is."""
+    return float(np.sqrt(design_effect(two_way, one_way)))
 
 
 def holm(p: np.ndarray) -> np.ndarray:
@@ -242,4 +265,5 @@ __all__ = [
     "redraw_estimates",
     "summarize_redraws",
     "two_way_estimates",
+    "width_ratio",
 ]

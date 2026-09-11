@@ -18,6 +18,7 @@ controls for the score and the redraws are in ``tests/test_rung1_controls.py``.
 from __future__ import annotations
 
 import itertools
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -38,6 +39,7 @@ from fmharness.heldout.comparisons import (
     redraw_estimates,
     summarize_redraws,
     two_way_estimates,
+    width_ratio,
 )
 from fmharness.heldout.scoring import (
     GENE_SETS,
@@ -56,7 +58,7 @@ def _fixture_answers() -> Answers:
     the tested genes responding, and three pairs with a known place in the masks:
 
     * (L1, D2) keeps only 30 responding genes, so it is scored on all genes only;
-    * (L2, D4) is tested on only 40 genes, so it is scored on neither gene set;
+    * (L2, D4) is tested on at most its first 40 genes, so it is scored on neither gene set;
     * (L3, D0) is an excluded pair, scored on neither whatever its genes.
     """
     rng = np.random.default_rng(3)
@@ -128,7 +130,8 @@ def test_score_pairs_equals_corrcoef_on_each_scored_pair() -> None:
 @pytest.mark.step_score
 def test_score_pairs_leaves_out_excluded_and_thin_pairs() -> None:
     """With ``scoreable``'s masks, the excluded pair has no row in either gene set, a pair with
-    30 responding genes has a row on all genes only, and a pair tested on 40 genes has none."""
+    30 responding genes has a row on all genes only, and a pair tested on at most 40 genes has
+    none."""
     answers = _fixture_answers()
     masks = scoreable(answers, EXCLUDED)
     lines, drugs = _every_pair()
@@ -147,15 +150,15 @@ def test_score_pairs_leaves_out_excluded_and_thin_pairs() -> None:
 
 @pytest.mark.step_score
 def test_score_pairs_gives_nan_to_a_kept_pair_below_min_genes() -> None:
-    """A pair the masks keep but that has fewer than 50 genes to correlate gets a row with r NaN
-    (the combine drops NaN scores); a pair the masks leave out gets no row. Both ways a pair
-    falls short: masks that keep every pair, including the 30-responding-gene pair, and a
-    prediction finite on only 45 of a pair's genes."""
+    """A pair the masks keep but that has fewer than 50 selected genes gets a row with r NaN (a
+    pair with a NaN score is dropped for every model); a pair the masks leave out gets no row.
+    Masks that keep every pair: the 30-responding-gene pair is NaN on responding genes, the pair
+    tested on at most 40 genes on both sets, and the excluded pair, no longer left out, is
+    scored."""
     answers = _fixture_answers()
     keep_all = {g: np.ones((N_LINES, N_DRUGS), dtype=bool) for g in GENE_SETS}
     lines, drugs = _every_pair()
     prediction = np.random.default_rng(6).standard_normal((lines.size, N_GENES))
-    prediction[0, 45:] = np.nan
 
     frame = (
         score_pairs(prediction, lines, drugs, answers, keep_all)
@@ -166,10 +169,40 @@ def test_score_pairs_gives_nan_to_a_kept_pair_below_min_genes() -> None:
     assert len(frame) == 2 * N_LINES * N_DRUGS
     thin = frame.loc[("responding", "L1", "D2")]
     assert np.isnan(thin["r"]) and thin["n_genes"] == 30
+    assert np.isnan(frame.loc[("responding", "L2", "D4"), "r"])
     assert np.isnan(frame.loc[("all", "L2", "D4"), "r"])
-    assert np.isnan(frame.loc[("responding", "L0", "D0"), "r"])
-    assert frame.loc[("all", "L0", "D0"), "n_genes"] <= 45
+    assert frame.loc[("all", "L2", "D4"), "n_genes"] == int(np.isfinite(answers.delta[2, 4]).sum())
     assert np.isfinite(frame.loc[("responding", "L3", "D0"), "r"])
+    assert int(np.count_nonzero(np.isnan(frame["r"].to_numpy(dtype=np.float64)))) == 3
+
+
+@pytest.mark.step_score
+def test_score_pairs_rejects_a_prediction_not_finite_at_a_selected_gene() -> None:
+    """No model is scored on fewer genes than another on the same pair: a prediction that is NaN
+    or infinite at a gene selected for a kept pair raises, naming the gene set and the pair. A
+    non-finite value where no kept pair selects -- a pair's untested genes, or a pair the masks
+    leave out -- is not read: the table equals the one from a finite prediction."""
+    answers = _fixture_answers()
+    masks = scoreable(answers, EXCLUDED)
+    lines, drugs = _every_pair()
+    prediction = np.random.default_rng(8).standard_normal((lines.size, N_GENES))
+    finite_table = score_pairs(prediction, lines, drugs, answers, masks)
+
+    unread = prediction.copy()
+    unread[~np.isfinite(answers.delta).reshape(lines.size, N_GENES)] = np.nan
+    unread[3 * N_DRUGS + 0] = np.inf  # (L3, D0), the excluded pair
+    pd.testing.assert_frame_equal(score_pairs(unread, lines, drugs, answers, masks), finite_table)
+
+    responding_gene = int(np.flatnonzero(answers.responding[0, 0])[0])
+    all_only_gene = int(
+        np.flatnonzero(np.isfinite(answers.delta[0, 0]) & ~answers.responding[0, 0])[0]
+    )
+    cases = ((responding_gene, np.nan, "responding"), (all_only_gene, np.inf, "all"))
+    for gene, value, gene_set in cases:
+        broken = prediction.copy()
+        broken[0, gene] = value  # (L0, D0), kept on both gene sets
+        with pytest.raises(ValueError, match=rf"not finite at 1 {gene_set}-gene .*L0, D0"):
+            score_pairs(broken, lines, drugs, answers, masks)
 
 
 @pytest.mark.step_score
@@ -222,6 +255,21 @@ def test_score_pairs_rejects_misshapen_inputs() -> None:
         score_pairs(prediction, lines + 1, drugs, answers, masks)
     with pytest.raises(ValueError, match="masks"):
         score_pairs(prediction, lines, drugs, answers, {"all": masks["all"]})
+
+
+@pytest.mark.step_score
+def test_score_pairs_rejects_misshapen_masks() -> None:
+    """Each gene set's mask must be [lines, drugs]. A larger mask would otherwise index without
+    error and keep the wrong pairs; a transposed one would fail with an unrelated IndexError."""
+    answers = _fixture_answers()
+    masks = scoreable(answers, EXCLUDED)
+    lines, drugs = _every_pair()
+    prediction = np.random.default_rng(9).standard_normal((lines.size, N_GENES))
+    larger = {g: np.ones((N_LINES + 1, N_DRUGS + 1), dtype=bool) for g in GENE_SETS}
+    transposed = {"responding": masks["responding"], "all": masks["all"].T}
+    for wrong in (larger, transposed):
+        with pytest.raises(ValueError, match=r"masks must be \[4, 5\]"):
+            score_pairs(prediction, lines, drugs, answers, wrong)
 
 
 @pytest.mark.step_score
@@ -365,7 +413,46 @@ def test_two_way_estimates_equal_brute_force_resampling() -> None:
 
 @pytest.mark.step_null
 def test_design_effect_is_the_ratio_of_redraw_variances() -> None:
-    assert design_effect(np.array([1.0, 3.0, np.nan]), np.array([1.0, 2.0])) == pytest.approx(4.0)
+    """Two-way draws (1, 3) have variance 2, one-way draws (1, 2) variance 0.5: a design effect
+    of 4, and intervals sqrt(4) = 2 times as wide. NaN draws are left out."""
+    two_way, one_way = np.array([1.0, 3.0, np.nan]), np.array([1.0, 2.0])
+    assert design_effect(two_way, one_way) == pytest.approx(4.0)
+    assert width_ratio(two_way, one_way) == pytest.approx(2.0)
+    assert design_effect(np.full(4, 0.5), one_way) == 0.0
+
+
+@pytest.mark.step_null
+def test_design_effect_is_nan_where_the_ratio_is_undefined() -> None:
+    """Fewer than 2 finite draws on either side, or one-way draws that do not vary: the design
+    effect and the width ratio are NaN, and no RuntimeWarning is raised on the way."""
+    spread = np.array([1.0, 2.0, 4.0])
+    undefined = (
+        (spread, np.array([1.0, np.nan])),
+        (np.array([np.nan, 3.0]), spread),
+        (spread, np.full(5, 0.25)),
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        for two_way, one_way in undefined:
+            assert np.isnan(design_effect(two_way, one_way))
+            assert np.isnan(width_ratio(two_way, one_way))
+
+
+@pytest.mark.step_null
+def test_redraws_reject_non_finite_values() -> None:
+    """A NaN or infinite per-pair value raises at once with the cause, rather than turning every
+    draw that picks its unit into NaN and failing later as draws with no pairs."""
+    diffs, units = _dyadic_pairs(5, 20, seed=6)
+    drugs = np.arange(diffs.size) % 3
+    for bad in (np.nan, np.inf):
+        values = diffs.copy()
+        values[7] = bad
+        with pytest.raises(ValueError, match="must be finite; 1 of 20"):
+            redraw_estimates(values, units, 5, 10, 0)
+        with pytest.raises(ValueError, match="must be finite; 1 of 20"):
+            two_way_estimates(values, units, drugs, 5, 3, 10, 0)
+        with pytest.raises(ValueError, match="must be finite; 1 of 20"):
+            mean_score_ci(values, units, 5, 10, 0)
 
 
 @pytest.mark.step_null

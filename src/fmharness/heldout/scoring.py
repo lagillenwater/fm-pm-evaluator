@@ -60,6 +60,16 @@ def _check_pairs(
         raise ValueError(f"a line or drug index is outside the {n_lines} x {n_drugs} grid")
 
 
+def _check_masks(masks: Mapping[str, np.ndarray], answers: Answers) -> None:
+    missing = [gene_set for gene_set in GENE_SETS if gene_set not in masks]
+    if missing:
+        raise ValueError(f"masks has no entry for gene set(s) {missing}")
+    grid = answers.delta.shape[:2]
+    misshapen = {g: np.shape(masks[g]) for g in GENE_SETS if np.shape(masks[g]) != grid}
+    if misshapen:
+        raise ValueError(f"masks must be {list(grid)} (lines x drugs) arrays; got {misshapen}")
+
+
 def score_pairs(
     pred: np.ndarray,
     line_idx: np.ndarray,
@@ -72,27 +82,31 @@ def score_pairs(
     ``pred`` is ``[P, G]``: row ``i`` predicts pair ``(line_idx[i], drug_idx[i])`` over the
     answers' genes. A leave-one-line-out round passes one line's drugs, a leave-one-drug-out
     round one drug's lines; each pair's score does not depend on which other pairs are passed.
-    ``masks`` maps each gene set to a bool ``[L, D]`` array, normally ``answers.scoreable``.
+    ``masks`` maps each gene set to a bool ``[L, D]`` array, normally ``answers.scoreable``;
+    ``ValueError`` when one is missing or misshapen.
 
     Returns one row per kept (pair, gene set) with columns ``SCORE_COLUMNS``: the line and drug
     names from ``answers``, the gene set, ``r`` -- Pearson correlation of prediction and answer
     over the selected genes (the pair's responding genes, or every gene with a finite answer),
-    computed in float64 by ``masked_rowwise_pearson`` -- and ``n_genes``, the number of genes
-    the correlation is taken over (the selected count whenever the prediction is finite, as every
-    model's is). Rows come gene set by gene set (``GENE_SETS`` order), pairs in the order given.
+    computed in float64 by ``masked_rowwise_pearson`` -- and ``n_genes``, the number of selected
+    genes the correlation is taken over. Rows come gene set by gene set (``GENE_SETS`` order),
+    pairs in the order given.
+
+    The prediction must be finite at every gene selected for a kept pair (``ValueError``
+    otherwise), so no model is scored on fewer genes than another on the same pair. Entries no
+    kept pair selects -- untested genes, pairs the masks leave out -- are not read.
 
     Short pairs: a pair the mask leaves out has no row. A pair the mask keeps with fewer than
-    ``MIN_GENES`` genes to correlate (possible only with masks other than ``scoreable``'s, or a
-    non-finite prediction), or with zero variance on either side, gets a row with ``r`` NaN;
-    the combine drops NaN scores.
+    ``MIN_GENES`` selected genes (possible only with masks other than ``scoreable``'s), or with
+    zero variance on either side, gets a row with ``r`` NaN. A pair with a NaN score, from fewer
+    than ``MIN_GENES`` usable genes, is dropped for every model, so all models share one scored
+    population.
     """
     prediction = np.asarray(pred, dtype=np.float64)
     lines = np.asarray(line_idx)
     drugs = np.asarray(drug_idx)
     _check_pairs(prediction, lines, drugs, answers)
-    missing = [gene_set for gene_set in GENE_SETS if gene_set not in masks]
-    if missing:
-        raise ValueError(f"masks has no entry for gene set(s) {missing}")
+    _check_masks(masks, answers)
 
     line_names = np.asarray(answers.lines, dtype=object)
     drug_names = np.asarray(answers.drugs, dtype=object)
@@ -103,15 +117,23 @@ def score_pairs(
         predicted = prediction[kept]
         measured = answers.delta[pair_lines, pair_drugs].astype(np.float64)
         if gene_set == "responding":
-            select = answers.responding[pair_lines, pair_drugs]
+            select = answers.responding[pair_lines, pair_drugs] & np.isfinite(measured)
         else:
             select = np.isfinite(measured)
+        unscorable = select & ~np.isfinite(predicted)
+        if unscorable.any():
+            first = int(np.flatnonzero(unscorable.any(axis=1))[0])
+            raise ValueError(
+                f"the prediction is not finite at {int(np.count_nonzero(unscorable))} "
+                f"{gene_set}-gene entries selected for scoring (first pair: "
+                f"{line_names[pair_lines[first]]}, {drug_names[pair_drugs[first]]}); every "
+                "model must be scored on the same genes"
+            )
         columns["line"].append(line_names[pair_lines])
         columns["drug"].append(drug_names[pair_drugs])
         columns["gene_set"].append(np.full(pair_lines.size, gene_set, dtype=object))
         columns["r"].append(masked_rowwise_pearson(predicted, measured, MIN_GENES, select=select))
-        used = select & np.isfinite(predicted) & np.isfinite(measured)
-        columns["n_genes"].append(np.count_nonzero(used, axis=1).astype(np.int64))
+        columns["n_genes"].append(np.count_nonzero(select, axis=1).astype(np.int64))
     return pd.DataFrame({name: np.concatenate(parts) for name, parts in columns.items()})
 
 
