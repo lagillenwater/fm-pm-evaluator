@@ -101,6 +101,7 @@ NOISE_STRATA = "rung0_noise_strata.csv"
 CONTROL_NOISE = "rung0_control_noise.csv.gz"
 SPLIT = "rung0_split_assignment.csv"
 DOSE_STRATA = "rung0_dose_strata.csv"
+NULL_DRAWS_BY_DOSE = "rung0_null_draws_by_dose.csv"
 PARAMS = "rung0_reliability.params.json"
 
 #: The full condition key. A merge on fewer columns than these matches every dose of a
@@ -1005,6 +1006,84 @@ def check_dose_strata(task_dir: Path) -> list[Check]:
     return checks
 
 
+def check_dose_nulls(task_dir: Path) -> list[Check]:
+    """Each dose-level ceiling against floors drawn at its own dose, re-derived from its draws.
+
+    The dose-level rows of the strata table are the declared ceilings (decisions.md,
+    2026-09-11), and a ceiling passes only when it clears its mismatched-pair nulls. For every
+    dose level and gene set: both floors are the means of that dose's committed draws, both
+    p-values re-derive by the same bootstrap as the summary row's (resample n_pairs draws with
+    replacement, 2,000 times, seed 0; agreement within one bootstrap standard error and the same
+    verdict at 0.05), and both MDEs are positive and finite. The pooled row must carry the
+    summary row's own floors and p-value.
+    """
+    names = [
+        f"{label}: every dose level's floors and p-values re-derive from its own draws"
+        for label, _ in GENE_SETS
+    ]
+    strata_path = task_dir / DOSE_STRATA
+    if not (task_dir / NULL_DRAWS_BY_DOSE).exists() or not strata_path.exists():
+        return [skipped(name, f"{NULL_DRAWS_BY_DOSE} not written") for name in names]
+    strata = read_table(strata_path)
+    draws = read_table(task_dir / NULL_DRAWS_BY_DOSE)
+    row = summary_row(task_dir)
+    checks: list[Check] = []
+    for (label, _), name in zip(GENE_SETS, names, strict=True):
+        rows = strata[
+            (strata["gene_set"].astype(str) == label)
+            & (strata["weighting"].astype(str) == "per_triple")
+        ]
+        bad: list[str] = []
+        verdicts: list[str] = []
+        for _, s_row in rows.iterrows():
+            dose = str(s_row["dose"])
+            if dose == "all":
+                for key in ("null_diff_drug_mean_r", "null_same_drug_mean_r", "p_vs_null"):
+                    if not _close(float(row[f"{label}_{key}"]), float(s_row[key]), 4):
+                        bad.append(f"all/{key} differs from the summary row")
+                continue
+            here = draws[
+                (draws["gene_set"].astype(str) == label)
+                & np.array([_same_dose(str(d), dose) for d in draws["dose"]], dtype=bool)
+            ]
+            n_obs = int(s_row["n_pairs"])
+            mean_obs = float(s_row["splithalf_mean_r"])
+            for stratum, floor_key, p_key in (
+                ("diff_drug", "null_diff_drug_mean_r", "p_vs_null"),
+                ("same_drug", "null_same_drug_mean_r", "p_vs_same_drug"),
+            ):
+                pool = here[here["stratum"].astype(str) == stratum]["r"].to_numpy(dtype=float)
+                pool = pool[np.isfinite(pool)]
+                if pool.size < 10 or not _close(float(s_row[floor_key]), float(np.mean(pool)), 3):
+                    bad.append(f"{dose}/{stratum} floor")
+                    continue
+                boot = (
+                    np.random.default_rng(0)
+                    .choice(pool, size=(2000, n_obs), replace=True)
+                    .mean(axis=1)
+                )
+                recomputed = float((1 + np.sum(boot >= mean_obs)) / 2001)
+                reported = float(s_row[p_key])
+                tol = 1 / 2000 + 2 * float(np.sqrt(max(recomputed, 1e-9) / 2000)) + 5e-4
+                if abs(recomputed - reported) > tol or (recomputed < 0.05) != (reported < 0.05):
+                    bad.append(f"{dose}/{p_key} {reported} vs {recomputed:.4f}")
+                verdicts.append(
+                    f"{dose} {stratum}: {mean_obs} vs {float(s_row[floor_key])}, p {reported}"
+                )
+            for key in ("mde_80_vs_diff_drug", "mde_80_vs_same_drug"):
+                if not (np.isfinite(float(s_row[key])) and float(s_row[key]) > 0):
+                    bad.append(f"{dose}/{key}")
+        checks.append(
+            Check(
+                name,
+                f"{len(rows)} per-triple rows in {DOSE_STRATA}, each dose against its own draws",
+                "; ".join(verdicts) + (f"; DISAGREEING: {bad}" if bad else ""),
+                not bad and len(verdicts) > 0,
+            )
+        )
+    return checks
+
+
 def _same_dose(a: str, b: str) -> bool:
     """Two dose labels name the same level, whether the CSV round-tripped them as 5.0 or 5."""
     try:
@@ -1243,6 +1322,7 @@ def run_all_checks(task_dir: Path = DEFAULT_TASK_DIR, repo: Path = REPO) -> list
         *check_figures(task_dir),
         *check_pool_arithmetic(task_dir),
         *check_dose_strata(task_dir),
+        *check_dose_nulls(task_dir),
         *check_audit_checksums(task_dir),
         *check_tranche_content_hash(repo),
         *check_permutation(task_dir),

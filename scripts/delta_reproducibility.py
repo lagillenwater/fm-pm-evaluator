@@ -1003,7 +1003,22 @@ def per_pair_table(
     return out
 
 
-def dose_strata_table(per_pair: pd.DataFrame) -> pd.DataFrame:
+#: The null-side columns a dose-strata row carries when its nulls were computed: the floors it
+#: is read against, how many draws the p-value rests on, both p-values, and both MDEs.
+DOSE_NULL_COLUMNS = (
+    "null_diff_drug_mean_r",
+    "null_same_drug_mean_r",
+    "null_n_draws",
+    "p_vs_null",
+    "p_vs_same_drug",
+    "mde_80_vs_diff_drug",
+    "mde_80_vs_same_drug",
+)
+
+
+def dose_strata_table(
+    per_pair: pd.DataFrame, nulls: dict[tuple[str, str], dict[str, object]] | None = None
+) -> pd.DataFrame:
     """Every candidate ceiling that can be formed from the per-condition table, side by side.
 
     Holding dose fixed made the scoreable unit a (line, drug, dose) triple, and the screen did
@@ -1013,6 +1028,13 @@ def dose_strata_table(per_pair: pd.DataFrame) -> pd.DataFrame:
     row's statistic); and each (line, drug) pair weighted once, its triples averaged first.
     Within one dose level the last two coincide, so the per-pair weighting appears only for the
     pooled row. Both gene sets, each with its count, mean, median and Spearman-Brown value.
+
+    ``nulls`` maps ``(gene_set, dose)`` to that row's ``summarize`` output, and adds the row's
+    floors, p-values and MDEs (``DOSE_NULL_COLUMNS``). A dose-level ceiling is declared the one a
+    later rung divides by (decisions.md, 2026-09-11), and the spec passes a ceiling only when it
+    clears its mismatched-pair nulls, so each dose level is read against floors drawn from pairs
+    at that dose alone; ``"all"`` carries the pooled nulls the summary row reports. The
+    per-line-drug row has no nulls of its own and carries none.
     """
     rows: list[dict[str, object]] = []
 
@@ -1028,6 +1050,12 @@ def dose_strata_table(per_pair: pd.DataFrame) -> pd.DataFrame:
                 "splithalf_mean_r": round(mean, 4),
                 "splithalf_median_r": round(float(np.median(r)), 4) if r.size else float("nan"),
                 "spearman_brown_full": round(spearman_brown_or_nan(mean), 4),
+                **{
+                    col: (nulls or {}).get((gene_set, dose), {}).get(col, float("nan"))
+                    if weighting == "per_triple"
+                    else float("nan")
+                    for col in DOSE_NULL_COLUMNS
+                },
             }
         )
 
@@ -2055,16 +2083,58 @@ def main() -> None:
             "dose_handling": "held fixed: a condition is a (line, drug, dose) triple and the "
             "split is between that triple's plates",
             "split_rule": SPLIT_RULE,
-            "weighting": "every scored triple weighs one; the dose strata and the per-pair "
-            "weighting are in rung0_dose_strata.csv",
+            "weighting": "the declared ceilings are the dose-level rows of "
+            "rung0_dose_strata.csv, each against nulls drawn at its own dose; this row's mean "
+            "weighs every scored triple once and is reported, not divided by",
         },
+    )
+
+    # --- the dose-level ceilings, each against nulls drawn at its own dose -------------------
+    # A later rung divides by the ceiling at the dose it scores (decisions.md, 2026-09-11), and a
+    # ceiling passes only when it clears its mismatched-pair nulls. The pooled floors above mix
+    # the three doses, whose correlations differ several-fold, so each dose level draws its own:
+    # the same three strata, over triples at that dose alone.
+    dose_of_row = np.round(piv0.index.get_level_values(2).to_numpy(dtype=float), 6)
+    dose_nulls: dict[tuple[str, str], dict[str, object]] = {}
+    dose_null_rows: list[pd.DataFrame] = []
+    for dose in np.unique(dose_of_row):
+        at = dose_of_row == dose
+        dose_label = str(float(dose))
+        p0d, p1d = piv0.loc[at], piv1.loc[at]
+        for label, r_vec, sel in (("all", r_all, None), ("responder", r_resp, select)):
+            nulls_d = stratified_null_draws(
+                p0d,
+                p1d,
+                n_perm=args.n_perm,
+                seed=args.seed,
+                min_genes=args.min_genes,
+                select=None if sel is None else sel[at],
+            )
+            dose_nulls[(label, dose_label)] = summarize(
+                r_vec[at], nulls_d, args.seed, even_mask=even_mask[at]
+            )
+            dose_null_rows.append(null_draw_table(nulls_d).assign(gene_set=label, dose=dose_label))
+            d = dose_nulls[(label, dose_label)]
+            print(
+                f"dose {dose_label:<5} {label:<9}: mean r {d['splithalf_mean_r']} against floors "
+                f"{d['null_diff_drug_mean_r']} (different drug), {d['null_same_drug_mean_r']} "
+                f"(same drug, same dose); p {d['p_vs_null']}, {d['p_vs_same_drug']}"
+            )
+        del p0d, p1d
+    for label in ("all", "responder"):
+        prefix = f"{label}_"
+        dose_nulls[(label, "all")] = {
+            k[len(prefix) :]: v for k, v in summary.items() if k.startswith(prefix)
+        }
+    pd.concat(dose_null_rows, ignore_index=True).to_csv(
+        out_dir / "rung0_null_draws_by_dose.csv", index=False
     )
 
     # --- evidence tables ---------------------------------------------------------------------
     per_pair = per_pair_table(piv0, piv1, r_all, r_responder=r_resp, select=select)
     per_pair["n_plates_even"] = even_mask
     per_pair.to_csv(out_dir / "rung0_per_pair_r.csv", index=False)
-    dose_strata = dose_strata_table(per_pair)
+    dose_strata = dose_strata_table(per_pair, dose_nulls)
     dose_strata.to_csv(out_dir / "rung0_dose_strata.csv", index=False)
 
     null_rows = [

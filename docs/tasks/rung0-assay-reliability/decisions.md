@@ -167,3 +167,25 @@ per `docs/PROCESS.md` §1 and SPEC project rule 2.
   0.51 for responders — and the any-pair value stays in the table, unread. No verdict depends on
   it: the observed means sit 145 and 201 null standard deviations above the permutation null,
   and exact p is 0.0099, the floor 100 permutations can give, in every stratum of both gene sets.
+- **2026-09-11** — **The ceilings are the dose-level ones**, at Lucas's direction ("per-triple
+  table with the dose-level strata"), after reading the dose figure. The screen replicated its
+  top dose far more than the other two and reproduces differently at each: responders 0.577 at
+  5 uM against 0.136 at 0.05 and 0.035 at 0.5, all genes 0.081 against 0.029 and 0.024. The mean
+  over all triples (0.430, 0.065) is a blend weighted by where the screen happened to replicate,
+  not a property of any dose, so it is reported and not divided by. What is promoted: the
+  per-triple table (`rung0_per_pair_r.csv`), the primary artifact every aggregate is computed
+  from; the dose-strata table (`rung0_dose_strata.csv`), whose dose-level rows are the ceilings;
+  the summary row (`rung0_reliability.csv`), reported; and the noise decomposition. A later rung
+  reads against the ceiling at the dose it scores, restricted to its own triples. The per-line-
+  drug weighting is not used.
+
+  Consequence, found while implementing it, and a correction of what this entry's sibling of
+  2026-09-09 claimed: that entry said every candidate is an aggregate of the committed table and
+  the choice needs no second run. That held for the means, not for the nulls. A ceiling passes
+  only when it clears its mismatched-pair floors, the floors had been drawn once over all doses
+  pooled, and the committed draws do not record dose, so they could not be split afterwards.
+  Each dose level now draws its own floors — the same three strata over triples at that dose
+  alone — with its own bootstrap p-values and MDEs, written into the strata table beside its mean
+  and to `rung0_null_draws_by_dose.csv`, and the combine stage was rerun for them. The battery
+  re-derives every dose level's floors and p-values from those draws. Had the candidates carried
+  their nulls from the first dose-fixed combine, the declaration would have needed no rerun.

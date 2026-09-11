@@ -68,8 +68,8 @@ restriction of that ceiling to the genes and drugs it scores, declared before it
 The dose-fixed run is complete and verified: over 7,641 replicated (line, drug, dose) triples
 the all-gene split-half is 0.065 (Spearman-Brown 0.122) and the responder split-half 0.430
 (0.601), with the responder ceiling a property of the top dose (0.577 at 5 uM against near zero
-below it). It awaits its re-audit and the declaration of which aggregate later rungs divide by
-before promotion. The dose-pooled number promoted earlier (0.118 / 0.559) measured a dose-to-dose
+below it). The ceilings are declared at the dose level, each read against floors drawn at its own dose;
+those floors and the re-audit stand between the run and promotion. The dose-pooled number promoted earlier (0.118 / 0.559) measured a dose-to-dose
 correlation and is superseded.
 [`docs/STATE.md`](docs/STATE.md) is authoritative.
 

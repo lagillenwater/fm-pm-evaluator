@@ -40,9 +40,11 @@ mean is mostly a statement about the top dose, and which aggregate later rungs d
 declared choice rather than an arithmetic fact. The run therefore commits the per-triple table as
 the primary artifact, and beside it a dose-strata table carrying every candidate: each dose level
 on its own, all triples with equal weight, and each (line, drug) pair weighted once with its
-triples averaged first. The candidate declared as the ceiling is recorded in `decisions.md` with
-the dose figure as its evidence, and a later rung's restriction is to a subset of the promoted
-triples under the same weighting.
+triples averaged first. The declaration, made after the dose figure was read (`decisions.md`, 2026-09-11): **the
+ceilings are the dose-level rows**, each read against mismatched-pair floors drawn from triples
+at its own dose, with its own p-values and MDEs; the mean over all triples is reported and not
+divided by; a later rung reads against the ceiling at the dose it scores, restricted to its own
+triples.
 
 **Two gene sets** That correlation is computed twice from the same split:
 
@@ -199,7 +201,8 @@ the machinery reads it correctly. Figures are produced by the run, not drawn by 
 - **dose** — where the replicated triples sit, and how they reproduce, before an aggregate is
   chosen.
   - *positive*: the dose-strata table recomputes from the per-triple table, every candidate
-    aggregate, both gene sets.
+    aggregate, both gene sets; and each dose level's floors and p-values re-derive from that
+    dose's own committed null draws.
   - *negative*: none of its own; the figure is descriptive and the candidates it shows are all
     read against the same nulls as the summary row.
   - *figures*: one dot per scored triple placed at its cell line, lines ordered by their median,
@@ -265,7 +268,10 @@ each reliability against the second and third. A mismatched draw for the respond
 uses the genes the *first* condition's first group selected, intersected with the genes finite in
 the second condition's second group: the same selection rule as the matched pair. Because mismatched draws reuse the same half-profiles,
 an exact permutation check — 100 permutations of the pairing, once pooled and once within each
-stratum — measures the dependence the bootstrap ignores and reports it as a design effect. One
+stratum — measures the dependence the bootstrap ignores and reports it as a design effect. Each dose
+level is also read against its own three floors, drawn from triples at that dose alone, since the
+dose-level rows are the declared ceilings and the pooled floors mix doses whose correlations differ
+several-fold. One
 hundred, not the 500 first declared: each permutation re-scores every triple over every gene,
 about 3 h 20 min per gene set for 500 on one node, and the observed means sit more than a
 hundred null standard deviations above the null, so the check's product is the design effect,
@@ -284,15 +290,16 @@ cost, so thirty-two slices in flight make the wall clock one scan rather than th
 each task holds a thirty-second of the group table -- small enough to be billed as a fraction of
 a node and slot into the queue, which sixteen slices of 120 GB did not. Slicing by gene is exact because gene is in every
 group key. Then `scripts/permutation_null.py` reads the same cache for the permutation check.
-Outputs land in the task folder. Three
-results are promoted with `scripts/promote_result.py` — the all-gene reliability and the
-responder reliability, each raw and Spearman-Brown corrected, with its own condition count, null
-p-values and MDE, and the even-plate-count corrected value beside it; and the noise
-decomposition, whose between-plate fraction is a finding about the assay in its own right and is
-cited as one. Each provenance record's inputs are the tranche content hash and nothing else —
-none of the three has a panel to pin — and its arguments record the inclusion choices (all genes;
-every drug with a replicated triple; dose held fixed; the split rule; the declared weighting) and,
-for the responder row, the selection rule and its `padj` threshold. The record's code commit is
+Outputs land in the task folder. Four
+tables are promoted with `scripts/promote_result.py`: the per-triple table, the primary artifact
+every aggregate is computed from; the dose-strata table, whose dose-level rows are the ceilings,
+each with its count, mean, Spearman-Brown value, floors drawn at its dose, p-values and MDEs; the
+summary row, the mean over all triples with its pooled nulls, reported and not divided by; and the
+noise decomposition, whose between-plate fraction is a finding about the assay in its own right.
+Each provenance record's inputs are the tranche content hash and nothing else, and its arguments
+record the inclusion choices (all genes; every drug with a replicated triple; dose held fixed; the
+split rule; the declared dose-level ceilings) and, for the responder rows, the selection rule and
+its `padj` threshold. The record's code commit is
 the commit the RUN was made at, read from the run's own parameter sidecar, not the commit
 promotion happens at; the two are recorded separately.
 

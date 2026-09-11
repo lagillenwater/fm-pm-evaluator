@@ -56,7 +56,7 @@ TASK_DIR = REPO / "docs" / "tasks" / "rung0-assay-reliability"
 #: revisited rather than quietly going stale -- the one number in the wave that nothing else
 #: guards. Skipped checks are counted: whether the permutation job has run changes what can be
 #: checked, never how many claims the battery is answerable for.
-EXPECTED_CHECKS = 77
+EXPECTED_CHECKS = 79
 
 
 @pytest.fixture(scope="session")
@@ -160,6 +160,7 @@ def test_the_check_battery_covers_every_layer(artifacts: Path) -> None:
         "split alternates over sorted plate ids",
         "scored conditions are the replicated triples",
         "dose-strata row recomputes",
+        "dose level's floors and p-values re-derive",
         "commit the run was made at",
         "checksum recomputes from the file it names",
         "tranche content hash",

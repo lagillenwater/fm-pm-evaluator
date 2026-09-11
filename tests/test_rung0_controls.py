@@ -1318,6 +1318,7 @@ def test_main_writes_every_declared_artifact_on_a_synthetic_pool(
         "rung0_control_noise.csv.gz",
         "rung0_split_assignment.csv",
         "rung0_dose_strata.csv",
+        "rung0_null_draws_by_dose.csv",
         "audit_checksums.json",
     }
     got = {p.name for p in out.glob("*") if p.is_file()}
