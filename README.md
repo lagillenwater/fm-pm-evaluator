@@ -65,12 +65,11 @@ Rung 0 — the reliability ceiling every higher rung is read against — is in p
 assay's full extent, every gene and every splittable drug; a higher rung reads against a
 restriction of that ceiling to the genes and drugs it scores, declared before it scores.
 
-The dose-fixed run is complete and verified: over 7,641 replicated (line, drug, dose) triples
-the all-gene split-half is 0.065 (Spearman-Brown 0.122) and the responder split-half 0.430
-(0.601), with the responder ceiling a property of the top dose (0.577 at 5 uM against near zero
-below it). The ceilings are declared at the dose level, and each clears floors drawn at its own dose; the
-re-audit and the pooled promotion's withdrawal stand between the run and promotion. The dose-pooled number promoted earlier (0.118 / 0.559) measured a dose-to-dose
-correlation and is superseded.
+Rung 0 is promoted on this branch: the ceilings are declared per dose, each clearing floors drawn
+at its own dose. Responders reproduce at 0.577 at 5 uM (Spearman-Brown 0.732) and far less at the
+two lower doses; over all genes the split-half is 0.081, 0.029 and 0.024. The mean over all
+replicated triples is reported, not divided by. The dose-pooled promotion of 2026-09-02 is
+withdrawn.
 [`docs/STATE.md`](docs/STATE.md) is authoritative.
 
 ## Quickstart

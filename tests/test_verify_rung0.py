@@ -205,3 +205,19 @@ def test_a_perturbed_claim_fails_the_battery(artifacts: Path) -> None:
         assert any("checksum recomputes" in str(c.name) and c.skipped for c in checks), (
             "with no checksum record the battery must SKIP that check, not silently pass it"
         )
+
+
+def test_the_battery_passes_with_the_large_noise_sample_held_off_the_repository(
+    artifacts: Path,
+) -> None:
+    """The 73 MB per-gene noise sample is kept off git and pinned by checksum. Without it the
+    checks that read it skip, its checksum is not counted missing, and nothing fails: every
+    promoted noise number still recomputes from the committed per-condition sums."""
+    (artifacts / vr.NOISE_PER_GENE).unlink()
+    checks = vr.run_all_checks(artifacts)
+    assert not _failures(checks), _failures(checks)
+    skipped_names = [str(c.name) for c in checks if c.skipped]
+    assert any("sigma2_plate_signed" in name for name in skipped_names)
+    assert any(
+        "pooled between-plate share recomputes" in str(c.name) and not c.skipped for c in checks
+    )

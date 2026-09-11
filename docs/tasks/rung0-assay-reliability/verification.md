@@ -115,6 +115,10 @@ reported, not cited. Both tercile rankings rise (0.050 → 0.070 → 0.075; 0.06
   `rung0_permutation_summary.params.json`, `rung0_permutation_summary_responder.params.json` —
   each with the commit and job that produced it.
 - Checksums: `audit_checksums.json`, one sha256 per artifact, recomputed by the battery.
+- Held off the repository because of its size: `rung0_noise_per_gene.csv.gz` (73 MB, the
+  two-million-row per-gene noise sample), sha256 `d0b506ff48ddfd67e3916b237dfe213c950b8d50a025c4945b32d949fa355f2a`, in the Alpine checkout's task folder.
+  No promoted number is read from it; the battery's row-by-row identity and strata checks, which
+  need it, run where it is present and skip where it is not.
 - Logs: `results/rung0-assay-reliability/logs/`.
 
 ## Open

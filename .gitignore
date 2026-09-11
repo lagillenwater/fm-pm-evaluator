@@ -235,3 +235,7 @@ _moved_aside/
 
 # macOS folder metadata, never source
 .DS_Store
+
+# Rung 0's per-gene noise sample (73 MB): held off the repository, pinned by sha256 in
+# docs/tasks/rung0-assay-reliability/verification.md and audit_checksums.json.
+docs/tasks/rung0-assay-reliability/rung0_noise_per_gene.csv.gz

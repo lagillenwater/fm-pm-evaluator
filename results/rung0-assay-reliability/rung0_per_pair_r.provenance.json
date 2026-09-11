@@ -1,0 +1,34 @@
+{
+  "result": "results/rung0-assay-reliability/rung0_per_pair_r.csv",
+  "result_sha256": "9ad3713d005d0989f7d55c8b6281a2b411c67dd453faa5f3e89e4787902011bf",
+  "task": "rung0-assay-reliability",
+  "script": "scripts/delta_reproducibility.py",
+  "args": {
+    "tranche_id": "tahoe100m-pseudobulk-de.v1",
+    "dose_handling": "held fixed: a condition is a (line, drug, dose) triple split between its plates",
+    "split_rule": "plates sorted by id as text within each triple, assigned alternately",
+    "gene_inclusion": "every gene the table carries",
+    "drug_inclusion": "every drug with a replicated (line, drug, dose) triple",
+    "role": "the per-triple table: primary artifact every aggregate is computed from"
+  },
+  "inputs": {
+    "tranche_manifest": "9a8797a5698e2c56ec1b61bdd3d5f68d18a972e227e86b64ac341ef507f73dd6"
+  },
+  "log": "results/rung0-assay-reliability/logs/rung0-combine-32379206.out",
+  "log_sha256": "3fbdd053447a9f81a1371b61b4f447780a40e041efe6fbcaed7a56e8c47ff7e0",
+  "job_id": "32379206",
+  "clean_tree": true,
+  "environment": {
+    "code_commit": "8392557778b0655560cab5679a596de633a7ac9d",
+    "python_version": "3.13.5",
+    "seed": 0,
+    "cuda_deterministic": false,
+    "data_commit": "9a8797a5698e2c56ec1b61bdd3d5f68d18a972e227e86b64ac341ef507f73dd6",
+    "container_digest": null,
+    "torch_version": null,
+    "cuda_version": null,
+    "model_weights_hash": null
+  },
+  "promoted_at": "2026-09-11T04:46:52.177095Z",
+  "promotion_commit": "170688bc7a008450cb21ed470f92a5365e512cdf"
+}

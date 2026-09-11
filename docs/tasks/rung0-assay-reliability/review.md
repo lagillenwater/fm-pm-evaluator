@@ -29,10 +29,7 @@ from the `<result>.params.json` sidecar every run writes, and the promotion comm
 verification battery checks that a promoted record's `code_commit` is the sidecar's `git_sha`,
 which the existing record fails.
 
-**Remains.** The 2026-09-02 record itself is wrong and the result it points at is superseded.
-Whether the pooled promotion is withdrawn (the run's evidence stays in the task folder and in
-git) or re-promoted with the corrected commit is a decision for the principal investigator;
-nothing new is promoted until the dose-fixed run has been audited.
+**Done (2026-09-11).** The pooled promotion is withdrawn, and this run's four tables are promoted with records naming the commit the run was made at (`8392557`, combine job 32379206).
 
 ### P1 — the noise decomposition is biased in the two-plate regime
 
@@ -76,9 +73,7 @@ key; the sidecar records the dose handling, the split rule and the weighting; th
 read the per-condition sums the run commits for every condition and use the sample only for the
 row-wise identity, the strata and the control.
 
-**Remains.** The summary notebook's merge and the notebook's narrative are rewritten once the
-dose-fixed run's tables are in the task folder; the notebook is the reviewer's path and its
-numbers must be the run's.
+**Done.** The summary notebook merges on the full key and reads the dose-fixed run's tables.
 
 ### P1 — the audit gate has not passed
 
@@ -90,9 +85,7 @@ it had not.
 **Done.** This document. The audit's fix-wave section now records every item's disposition
 against the current tree. The summary's false sentence goes with the notebook rewrite.
 
-**Remains.** The re-audit by a fresh reader, on the dose-fixed run's artifacts, before the summary
-is finalised and before anything is promoted; and `verification.md` once the run has been
-verified. The gate is not passed until the re-audit says so.
+**Done.** `verification.md` records the run; the re-audit passed on its third pass (`audit.md`, "Re-audit").
 
 ### P2 — the specification does not define the quantity later rungs divide by
 
@@ -106,8 +99,7 @@ the equal-weight mean over triples beside each dose level and the per-pair weigh
 the per-triple table those are aggregates of, and declares the ceiling in the task's decision
 lineage. The design says the same, and its stale sentences are gone.
 
-**Remains.** The declaration itself, made after the dose figure is read (design, "The unit, and
-its weighting"; decisions 2026-09-09).
+**Done (2026-09-11).** The ceilings are declared per dose, each against floors drawn at its own dose.
 
 ### P2 — definitions that do not match their names
 
@@ -139,8 +131,8 @@ the question rather than answering it: every replicated triple splits.
 
 ## The run, and what follows it
 
-The dose-fixed run is a chain of three cluster jobs submitted 2026-09-09 (assign 32341467, the
-sixteen-task slice array 32341468, combine 32341469), on code that carries every fix above. When
-it lands: the dose figure and the estimand decision; the summary and verify notebooks rewritten
-against the run's tables; `verification.md`; the fresh-reader re-audit; promotion with run-time
-provenance; the state document and the pull request description.
+The dose-fixed run completed on 2026-09-10 and 2026-09-11 (assign 32366450, the packed slices
+32369084, the permutation check 32378577, the final combine 32379206), on code carrying every fix
+above plus the per-dose floors. It is verified (`verification.md`: the battery 79 of 79), audited
+(`audit.md`, re-audit passed), and promoted. The branch history was rebuilt into five commits by
+area, with every earlier commit reachable under the tag `rung0-pre-rewrite-2026-09-11`.

@@ -120,7 +120,7 @@ per `docs/PROCESS.md` §1 and SPEC project rule 2.
   `mde_curve_table` (power against condition count), `effect_size_tercile_table` (the
   empirical control with intervals), `spearman_brown_or_nan` (the correction's guard at r = -1),
   `write_audit_checksums` (the audit interface) — the ones the audit found unnamed, not a
-  complete inventory, which `git diff 640a428..HEAD --stat -- scripts/delta_reproducibility.py`
+  complete inventory, which `git diff 640a428..HEAD -- scripts/delta_reproducibility.py`
   is. Added on 2026-09-09: `split_assignment`,
   `slice_aggregate`, `frame_from_slice`, `noise_from_slice`, `pooled_plate_variance`,
   `dose_strata_table`, `run_slice`, `load_slices`, `write_noise_outputs`.
@@ -208,3 +208,33 @@ per `docs/PROCESS.md` §1 and SPEC project rule 2.
   functions of committed tables, so redrawing them reproduces what the corrected run would draw
   without repeating a scan or a permutation; the checksum record is rewritten after, and the
   corrected drawing code is what any future run uses.
+- **2026-09-11** — **The dose-pooled promotion of 2026-09-02 is withdrawn**, at Lucas's direction
+  ("withdraw it"). It promoted a dose-to-dose correlation as a reliability, and its record named
+  the promotion-time commit `92407c1` where its own sidecar said `5192606`. How it left the branch,
+  stated because the diff will not show it: the history of `rung0-assay-reliability` was rebuilt
+  the same day into five commits by area on top of `project-docs`, at Lucas's direction ("rewrite
+  now"), and the rebuilt commits never add it, so the withdrawal appears in no diff. The record,
+  its table and its job log stay reachable under the tag `rung0-pre-rewrite-2026-09-11`, with every
+  commit hash this lineage and the audit cite from before the rebuild; the run's own commits are
+  tagged `rung0-run-*`, and the commit the re-audit's third pass read `rung0-reaudit-8797878`.
+- **2026-09-11** — **This run is promoted**: the per-triple table, the dose-strata table whose
+  dose-level rows are the ceilings, the summary row, and the noise decomposition, each record
+  naming combine job 32379206 and commit `8392557`, the commit the run was made at. The per-triple
+  and dose-strata tables were written by that job without sidecars of their own, so their records
+  take the commit from the sidecar the same job wrote, and the battery's provenance check now reads
+  a table's producing commit that way.
+- **2026-09-11** — **The MDE rule differs between the pooled row and the dose rows, deliberately.**
+  The battery requires the pooled row's MDE to sit below its observed mean where the result is
+  called significant, a sanity check that holds on its data. The dose rows are not held to it: the
+  0.5 uM responder ceiling clears its same-dose floor at p 0.026 with an MDE of 0.042 above its
+  mean of 0.035, which is significant with under 80% power. That is a property worth reporting
+  (the summary and verification record state it), not a defect to fail on.
+- **2026-09-11** — **The 73 MB per-gene noise sample is held off the repository**, at Lucas's
+  direction ("keep it off git"). The project caps committed files at 1 MB and PROCESS keeps
+  genuinely large artifacts on the cluster, pinned by checksum. The sample stays in the Alpine
+  checkout's task folder, sha256 `d0b506ff48ddfd67e3916b237dfe213c950b8d50a025c4945b32d949fa355f2a`, recorded in `audit_checksums.json` and
+  `verification.md`. No promoted number depends on it: the pooled noise shares recompute from the
+  committed per-condition sums. The two battery checks that read it — the row-by-row identity and
+  the strata — run where it is present and skip where it is not; a test pins that the battery
+  passes without it. The 1–4 MB tables stay committed, as the earlier evidence commit already
+  carried files that size.

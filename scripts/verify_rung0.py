@@ -86,7 +86,7 @@ FIGURES: tuple[str, ...] = (
 #: stage that did not run; a figure missing while its table exists is a broken figure step. The
 #: battery has to tell those apart, or a partial run reports as a defect.
 FIGURE_SOURCES: dict[str, str] = {
-    "05_decompose.png": "rung0_noise_per_gene.csv.gz",
+    "05_decompose.png": "rung0_noise_decomposition.csv",
     "11_permutation_vs_bootstrap.png": "rung0_permutation_summary.csv",
     "11_permutation_vs_bootstrap_responder.png": "rung0_permutation_summary_responder.csv",
 }
@@ -96,6 +96,13 @@ PER_PAIR = "rung0_per_pair_r.csv"
 NULL_DRAWS = "rung0_null_draws.csv"
 NOISE = "rung0_noise_decomposition.csv"
 NOISE_PER_GENE = "rung0_noise_per_gene.csv.gz"
+
+#: Artifacts the run wrote and the audit checksummed that are held off the repository because of
+#: their size (the project caps committed files at 1 MB; this sample is 73 MB). Each stays in the
+#: Alpine checkout's task folder, pinned by the sha256 in audit_checksums.json and verification.md.
+#: Where one is present, every check that reads it runs; where it is absent, those checks skip and
+#: its checksum is not counted missing. No promoted number is read from any of them.
+OFF_REPOSITORY = frozenset({NOISE_PER_GENE})
 NOISE_BY_CONDITION = "rung0_noise_by_condition.csv"
 NOISE_STRATA = "rung0_noise_strata.csv"
 CONTROL_NOISE = "rung0_control_noise.csv.gz"
@@ -551,10 +558,11 @@ def check_noise_decomposition(task_dir: Path) -> list[Check]:
         "noise: each stratum's pooled share recomputes from the committed sample",
         "noise: the control pool's pooled share recovers the planted one half",
     )
-    required = (NOISE, NOISE_BY_CONDITION, NOISE_PER_GENE, NOISE_STRATA)
+    required = (NOISE, NOISE_BY_CONDITION, NOISE_STRATA)
     if not all((task_dir / f).exists() for f in required):
         why = "the noise tables were not written yet"
         return [skipped(name, why) for name in names]
+    has_sample = (task_dir / NOISE_PER_GENE).exists()
     reported = read_table(task_dir / NOISE).iloc[0]
     by_cond = read_table(task_dir / NOISE_BY_CONDITION)
     n = by_cond["n_gene_doses"].to_numpy(dtype=float)
@@ -572,46 +580,47 @@ def check_noise_decomposition(task_dir: Path) -> list[Check]:
     per_cond = per_cond[np.isfinite(per_cond)]
     over_conditions = float(np.mean(per_cond)) if per_cond.size else float("nan")
 
-    sample = pd.read_csv(
-        task_dir / NOISE_PER_GENE,
-        usecols=["var_lfc", "mean_se2", "sigma2_plate_signed", "base_mean", "mean_lfc"],
-    )
-    var = sample["var_lfc"].to_numpy(dtype=float)
-    se2 = sample["mean_se2"].to_numpy(dtype=float)
-    signed = sample["sigma2_plate_signed"].to_numpy(dtype=float)
-    finite = np.isfinite(var) & np.isfinite(se2)
-    worst = float(np.max(np.abs((var - se2)[finite] - signed[finite]))) if finite.any() else 0.0
-    n_sample = int(reported["n_sample_rows"]) if "n_sample_rows" in reported else len(sample)
+    if has_sample:
+        sample = pd.read_csv(
+            task_dir / NOISE_PER_GENE,
+            usecols=["var_lfc", "mean_se2", "sigma2_plate_signed", "base_mean", "mean_lfc"],
+        )
+        var = sample["var_lfc"].to_numpy(dtype=float)
+        se2 = sample["mean_se2"].to_numpy(dtype=float)
+        signed = sample["sigma2_plate_signed"].to_numpy(dtype=float)
+        finite = np.isfinite(var) & np.isfinite(se2)
+        worst = float(np.max(np.abs((var - se2)[finite] - signed[finite]))) if finite.any() else 0.0
+        n_sample = int(reported["n_sample_rows"]) if "n_sample_rows" in reported else len(sample)
 
-    strata = read_table(task_dir / NOISE_STRATA)
-    ok = finite & (var > 0)
-    d = sample.loc[ok].copy()
-    d["abs_lfc"] = d["mean_lfc"].abs()
-    d["expression_quartile"] = pd.qcut(
-        d["base_mean"].rank(method="first"), 4, labels=[1, 2, 3, 4]
-    ).astype(int)
-    d["response_quartile"] = pd.qcut(
-        d["abs_lfc"].rank(method="first"), 4, labels=[1, 2, 3, 4]
-    ).astype(int)
-    grouped = d.groupby(["expression_quartile", "response_quartile"]).agg(
-        n=("var_lfc", "size"), var_mean=("var_lfc", "mean"), se2_mean=("mean_se2", "mean")
-    )
-    strata_agree = len(strata) == len(grouped) and len(strata) > 0
-    if strata_agree:
-        for _, row in strata.iterrows():
-            key = (int(row["expression_quartile"]), int(row["response_quartile"]))
-            if key not in grouped.index:
-                strata_agree = False
-                break
-            g = grouped.loc[key]
-            recomputed = max(float(g["var_mean"]) - float(g["se2_mean"]), 0.0) / float(
-                g["var_mean"]
-            )
-            if int(g["n"]) != int(row["n"]) or not _close(
-                float(row["between_plate_fraction_pooled"]), recomputed, 4
-            ):
-                strata_agree = False
-                break
+        strata = read_table(task_dir / NOISE_STRATA)
+        ok = finite & (var > 0)
+        d = sample.loc[ok].copy()
+        d["abs_lfc"] = d["mean_lfc"].abs()
+        d["expression_quartile"] = pd.qcut(
+            d["base_mean"].rank(method="first"), 4, labels=[1, 2, 3, 4]
+        ).astype(int)
+        d["response_quartile"] = pd.qcut(
+            d["abs_lfc"].rank(method="first"), 4, labels=[1, 2, 3, 4]
+        ).astype(int)
+        grouped = d.groupby(["expression_quartile", "response_quartile"]).agg(
+            n=("var_lfc", "size"), var_mean=("var_lfc", "mean"), se2_mean=("mean_se2", "mean")
+        )
+        strata_agree = len(strata) == len(grouped) and len(strata) > 0
+        if strata_agree:
+            for _, row in strata.iterrows():
+                key = (int(row["expression_quartile"]), int(row["response_quartile"]))
+                if key not in grouped.index:
+                    strata_agree = False
+                    break
+                g = grouped.loc[key]
+                recomputed = max(float(g["var_mean"]) - float(g["se2_mean"]), 0.0) / float(
+                    g["var_mean"]
+                )
+                if int(g["n"]) != int(row["n"]) or not _close(
+                    float(row["between_plate_fraction_pooled"]), recomputed, 4
+                ):
+                    strata_agree = False
+                    break
 
     checks = [
         Check(
@@ -644,21 +653,30 @@ def check_noise_decomposition(task_dir: Path) -> list[Check]:
                 4,
             ),
         ),
-        Check(
-            names[4],
-            f"{n_sample} committed sample rows, the identity on every one",
-            f"{len(sample)} rows read; worst absolute deviation {worst:.3e}",
-            len(sample) == n_sample and worst < 1e-9,
-        ),
-        Check(
-            names[5],
-            f"{len(strata)} strata rows, each a count and a pooled share",
-            "every stratum's count and pooled share recompute"
-            if strata_agree
-            else "a stratum's count or share does not recompute",
-            strata_agree,
-        ),
     ]
+    if has_sample:
+        checks += [
+            Check(
+                names[4],
+                f"{n_sample} committed sample rows, the identity on every one",
+                f"{len(sample)} rows read; worst absolute deviation {worst:.3e}",
+                len(sample) == n_sample and worst < 1e-9,
+            ),
+            Check(
+                names[5],
+                f"{len(strata)} strata rows, each a count and a pooled share",
+                "every stratum's count and pooled share recompute"
+                if strata_agree
+                else "a stratum's count or share does not recompute",
+                strata_agree,
+            ),
+        ]
+    else:
+        checks += [
+            skipped(names[4], f"{NOISE_PER_GENE} is held off the repository; pinned by checksum"),
+            skipped(names[5], f"{NOISE_PER_GENE} is held off the repository; pinned by checksum"),
+        ]
+    checks += []
     control_path = task_dir / CONTROL_NOISE
     if control_path.exists():
         control = pd.read_csv(control_path, usecols=["var_lfc", "mean_se2"])
@@ -1128,13 +1146,19 @@ def check_audit_checksums(task_dir: Path) -> list[Check]:
         ]
     recorded = json.loads((task_dir / CHECKSUMS).read_text())
     by_name = {p.name: p for p in task_dir.rglob("*") if p.is_file()}
-    missing = sorted(name for name in recorded if name not in by_name)
+    held_off = sorted(name for name in recorded if name not in by_name and name in OFF_REPOSITORY)
+    missing = sorted(
+        name for name in recorded if name not in by_name and name not in OFF_REPOSITORY
+    )
     moved = sorted(
         name
         for name, digest in recorded.items()
         if name in by_name and sha256_of(by_name[name]) != digest
     )
-    detail = f"{len(recorded) - len(missing) - len(moved)} of {len(recorded)} match"
+    detail = (
+        f"{len(recorded) - len(missing) - len(moved) - len(held_off)} of {len(recorded)} match"
+        + (f"; held off the repository, pinned by checksum: {held_off}" if held_off else "")
+    )
     if missing:
         detail += f"; missing: {missing}"
     if moved:
@@ -1284,13 +1308,25 @@ def check_promotion(task_dir: Path, repo: Path) -> list[Check]:
     # The producing commit. Every run writes <result>.params.json beside its result with the
     # git_sha it ran at; the record's code_commit must be THAT commit, not the commit promotion
     # happened at. The 2026-09-02 promotion recorded the latter, which held different code.
+    # A run writes a sidecar beside some tables and not others: the combine job writes one for the
+    # summary row and the noise decomposition, none for the per-triple and dose-strata tables it
+    # writes in the same process. So a table's producing commit is read from its own sidecar when
+    # there is one, and otherwise from the sidecar the same job wrote.
+    by_job = {
+        str(side.get("slurm_job_id")): side.get("git_sha")
+        for side in (json.loads(p.read_text()) for p in sorted(task_dir.glob("*.params.json")))
+    }
     commit_ok: list[str] = []
     commit_bad: list[str] = []
     for record_path in records:
         record = json.loads(record_path.read_text())
         promoted = repo / str(record["result"])
         sidecar = task_dir / promoted.with_suffix(".params.json").name
-        run_sha = json.loads(sidecar.read_text()).get("git_sha") if sidecar.exists() else None
+        run_sha = (
+            json.loads(sidecar.read_text()).get("git_sha")
+            if sidecar.exists()
+            else by_job.get(str(record.get("job_id")))
+        )
         recorded = str(record.get("environment", {}).get("code_commit", ""))
         ok = bool(run_sha) and recorded == run_sha and bool(record.get("promotion_commit"))
         (commit_ok if ok else commit_bad).append(
