@@ -97,6 +97,23 @@ remote_fixed() {
   ssh -o BatchMode=yes "$HOST" "$@"
 }
 
+# Shared move-aside fragment for `update` and `switch`. Given a git diff range/args (a single
+# two-dot token like "HEAD..@{u}", or two space-separated refs like "HEAD origin/<branch>"),
+# echoes the remote shell fragment that finds every path the far side ADDS which is (a) present
+# in the working tree and (b) NOT tracked by the current index, and moves each aside into
+# _moved_aside/<UTC time>/ with its path preserved -- never deletes, never touches a file the
+# incoming side does not add. Approved 2026-09-09 for `update`; see its comment below for why
+# this exists. `switch` reuses it unchanged as of 2026-09-11 (see switch's comment).
+move_aside_cmd() {
+  local range="$1"
+  echo "aside=_moved_aside/\$(date -u +%Y%m%dT%H%M%SZ) && \
+        git diff --name-only --diff-filter=A $range | while IFS= read -r f; do \
+          if [ -e \"\$f\" ] && ! git ls-files --error-unmatch -- \"\$f\" >/dev/null 2>&1; then \
+            mkdir -p \"\$aside/\$(dirname -- \"\$f\")\" && mv -- \"\$f\" \"\$aside/\$f\" && \
+            echo \"moved aside (untracked, incoming commit adds it): \$f -> \$aside/\$f\"; \
+          fi; done"
+}
+
 # Run an allowlisted command remotely. Arguments are passed through a single-quoted,
 # escape-safe rendering so remote word-splitting matches local intent.
 remote() {
@@ -159,12 +176,25 @@ case "$sub" in
     # CURRENT branch, so a new task's first deployment needs this once. `git switch`
     # refuses rather than clobbering local changes, same safety property as update;
     # --guess creates the local tracking branch from origin/<branch> when absent.
+    #
+    # Move-aside added 2026-09-11: rung1-held-out-prediction-work is the first task branch
+    # whose target tracks the PREVIOUS task's run outputs (rung 0's evidence commit added,
+    # e.g., docs/tasks/rung0-assay-reliability/rung0_split_assignment.csv), which the Alpine
+    # checkout already holds untracked from having run rung 0. `git switch` then refuses with
+    # "untracked working tree files would be overwritten" -- the exact case `update` already
+    # solves for fast-forwards via move_aside_cmd (see update's comment below for the policy).
+    # HEAD and the switch target can have diverged histories (this moves BETWEEN task
+    # branches, not along one), so this compares HEAD directly against origin/<branch> rather
+    # than relying on @{u}, which names switch's post-merge upstream, not its pre-switch source.
     [[ $# -eq 1 ]] || die "usage: ralpine switch <branch>"
     [[ "$1" =~ ^[A-Za-z0-9._/-]+$ ]] || die "refusing '$1': not a plausible branch name"
-    remote_fixed "git -C $(printf '%q' "$REMOTE_ROOT") fetch --quiet origin && \
-                  git -C $(printf '%q' "$REMOTE_ROOT") switch --guess $(printf '%q' "$1") && \
-                  git -C $(printf '%q' "$REMOTE_ROOT") merge --ff-only @{u} && \
-                  git -C $(printf '%q' "$REMOTE_ROOT") rev-parse --short HEAD"
+    branch_q="$(printf '%q' "$1")"
+    move_aside="$(move_aside_cmd "HEAD origin/$branch_q")"
+    remote_fixed "cd $(printf '%q' "$REMOTE_ROOT") && git fetch --quiet origin && \
+                  $move_aside && \
+                  git switch --guess $branch_q && \
+                  git merge --ff-only @{u} && \
+                  git rev-parse --short HEAD"
     ;;
   update)
     # Fast-forward the Alpine checkout to its upstream. Added 2026-08-24 on Lucas's
@@ -181,15 +211,12 @@ case "$sub" in
     # are the run's own copies of what is being committed. They are moved aside -- never
     # deleted -- into _moved_aside/<UTC time>/ under the checkout with their paths preserved,
     # each one listed, and only files that are BOTH untracked AND added by the incoming commits
-    # are touched (2026-09-09, first hit after the dose-pooled run's evidence commit). If the
-    # merge still refuses, the checkout has diverged and a human should look before anything.
+    # are touched (2026-09-09, first hit after the dose-pooled run's evidence commit; the
+    # move-aside logic itself lives in move_aside_cmd, shared with `switch`). If the merge
+    # still refuses, the checkout has diverged and a human should look before anything.
+    move_aside="$(move_aside_cmd "HEAD..@{u}")"
     remote_fixed "cd $(printf '%q' "$REMOTE_ROOT") && git fetch --quiet origin && \
-                  aside=_moved_aside/\$(date -u +%Y%m%dT%H%M%SZ) && \
-                  git diff --name-only --diff-filter=A HEAD..@{u} | while IFS= read -r f; do \
-                    if [ -e \"\$f\" ] && ! git ls-files --error-unmatch -- \"\$f\" >/dev/null 2>&1; then \
-                      mkdir -p \"\$aside/\$(dirname -- \"\$f\")\" && mv -- \"\$f\" \"\$aside/\$f\" && \
-                      echo \"moved aside (untracked, incoming commit adds it): \$f -> \$aside/\$f\"; \
-                    fi; done && \
+                  $move_aside && \
                   git merge --ff-only @{u} && git rev-parse --short HEAD"
     ;;
   rev)
