@@ -159,8 +159,12 @@ move_aside_cmd() {
 #     typo'd branch); `!` turned that into "differs," so a bad branch name used to copy and
 #     restore every locally-modified tracked file before `git switch` finally failed. `switch`'s
 #     case arm now verifies the branch exists right after `git fetch`, before anything else
-#     runs; belt-and-suspenders here, an exit code of 2 or more from this diff (anything but "0
-#     = same" or "1 = differs") also aborts loudly instead of being read as "differs."
+#     runs; belt-and-suspenders here, this diff's own exit code is captured directly (`rc=$?`
+#     runs immediately after the diff itself, NOT after an `if` whose condition may have been
+#     false -- that shape silently discards the diff's real exit status and reads as 0/"same"
+#     every time, which is exactly the bug a 2026-09-11 re-review caught, confirmed at runtime:
+#     it printed "copied aside" and restored the file even for a target that made the diff
+#     exit 128) and only 1 ("differs") proceeds; anything else aborts loudly as an error.
 #   - The modified-file list is read into `$modified` (a variable) BEFORE the loop starts,
 #     rather than piping `git diff --name-only HEAD` straight into the `while`: the loop's own
 #     `git checkout` writes the index, and running that concurrently with an still-live `git
@@ -172,9 +176,9 @@ copy_aside_cmd() {
           if [ ! -e \"\$f\" ] && [ ! -L \"\$f\" ]; then \
             echo \"skipped (not present locally, target changes it): \$f\"; continue; \
           fi; \
-          if git --literal-pathspecs diff --quiet HEAD \"$target\" -- \"\$f\"; then continue; fi; \
-          rc=\$?; \
-          if [ \"\$rc\" -ge 2 ]; then \
+          git --literal-pathspecs diff --quiet HEAD \"$target\" -- \"\$f\"; rc=\$?; \
+          if [ \"\$rc\" -eq 0 ]; then continue; fi; \
+          if [ \"\$rc\" -ne 1 ]; then \
             echo \"git diff failed (exit \$rc) comparing HEAD to $target for \$f\" >&2; exit 1; \
           fi; \
           mkdir -p \"\$aside/\$(dirname -- \"\$f\")\" && cp -p -- \"\$f\" \"\$aside/\$f\" && \

@@ -269,27 +269,61 @@ def test_copy_aside_cmd_skips_a_locally_deleted_path(tmp_path: Path) -> None:
     )
 
 
-def test_copy_aside_cmd_distinguishes_differs_from_error() -> None:
+def test_copy_aside_cmd_treats_a_diff_error_as_an_error_not_a_difference(tmp_path: Path) -> None:
+    """Behavioral regression for a round-3 finding: the loop used to run `rc=$?` AFTER an
+    `if git --literal-pathspecs diff --quiet ...; then continue; fi` whose condition was
+    FALSE -- but an `if` with no `else` always returns 0 when its condition is false, so `rc`
+    was always 0 and `-ge 2` could never fire. The reviewer confirmed this at runtime: a
+    target that made the per-path diff exit 128 still printed "copied aside" and restored the
+    file. This exercises copy_aside_cmd's own loop directly (not through `ralpine switch`,
+    whose top-level `git rev-parse --verify` guard would mask the bug for a whole nonexistent
+    BRANCH -- this targets the loop's per-path safeguard specifically, with a target ref that
+    is syntactically fine for `git rev-parse --verify` at the branch level but still makes the
+    per-path `git diff --quiet HEAD "$target" -- "$f"` itself fail, e.g. because `$target`
+    doesn't exist at all) against a real, tiny git repo.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init")
+    (repo / "shared.txt").write_text("committed v1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "base")
+    (repo / "shared.txt").write_text("local edit, never committed\n")
+
+    aside = tmp_path / "aside"
     body = _function_body("copy_aside_cmd")
-    # The target check must not be a naive `if ! git diff --quiet ...; then <copy>; fi` --
-    # `git diff --quiet` exits 128 for a target ref that doesn't resolve, and `!` would read
-    # that the same as "differs," copying and restoring every locally-modified tracked file
-    # before `git switch` finally failed on the bad ref. The check must be right-side-up (not
-    # inverted): "if the diff reports no difference, skip this path" -- and a captured exit
-    # code >= 2 (anything but 0 = same or 1 = differs) must abort loudly instead of being read
-    # as "differs."
-    assert (
-        r"if git --literal-pathspecs diff --quiet HEAD \"$target\" -- \"\$f\"; then continue; fi;"
-        in body
-    ), (
-        "the diff check must not be inverted with `!` -- it must test for 'no difference' "
-        "directly and `continue` in that (positive) branch"
+    script = (
+        f"copy_aside_cmd() {{{body}\n}}\n"
+        f"aside={aside}\n"
+        'eval "$(copy_aside_cmd "refs/this-ref-does-not-exist-at-all")"\n'
     )
-    assert r"rc=\$?;" in body, "the diff's exit code must be captured, not just tested with `!`"
-    assert r"if [ \"\$rc\" -ge 2 ]; then" in body, (
-        "an exit code of 2 or more (an error, not '0 = same' or '1 = differs') must be "
-        "distinguished and aborted, not silently treated as 'differs'"
+    env = dict(os.environ)
+    env.update(_GIT_TEST_ENV)
+    result = subprocess.run(
+        ["bash", "-c", script],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=10,
     )
+
+    assert result.returncode != 0, (
+        f"an unresolvable target ref must abort the loop, not be silently read as 'no "
+        f"difference' -- stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+    assert "copied aside" not in result.stdout, (
+        "must never copy/restore a file when the per-path diff itself errored"
+    )
+    assert (repo / "shared.txt").read_text() == "local edit, never committed\n", (
+        "the file must be left exactly as it was -- NOT restored to HEAD's content -- when "
+        "the diff comparing it to the target errored rather than reporting a real difference"
+    )
+    assert not aside.exists() or not any(aside.rglob("*")), (
+        "nothing should have been copied aside when the diff itself failed"
+    )
+    # `git switch` is never invoked in this test at all -- copy_aside_cmd's loop is exercised
+    # directly, precisely so a bug in it cannot be masked by switch's own top-level guard.
 
 
 def test_copy_aside_cmd_reads_modified_list_into_a_variable_first() -> None:
