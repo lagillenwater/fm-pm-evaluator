@@ -171,3 +171,24 @@ document they amend. `design.md` carries the current position.
       the top of its range in most rounds.
   - **Scope:** the control still plants a known answer and requires the shipped code to recover it. Nothing
     measured on real data changes.
+
+## Tooling changed by this task
+
+- **2026-09-11** — **`ralpine switch` now clears the way for a first deployment to a task branch.**
+  - **Why:** found when Alpine's single checkout could not move from `rung0-assay-reliability` to
+    `rung1-held-out-prediction-work`. Rung 0's run outputs sat on Alpine as untracked files, or as locally
+    modified tracked files, at paths the rung 1 branch tracks (rung 0's evidence commit added them), so
+    `git switch` refused.
+  - **What `switch` now does before switching:**
+    - moves untracked files that the target adds into `_moved_aside/<UTC>/`, the policy `update` has had
+      since 2026-09-09;
+    - copies each locally modified tracked file that the target changes into the same folder, then restores it;
+    - skips files deleted locally;
+    - uses literal pathspecs;
+    - refuses a target branch that does not exist on origin, and branch names beginning with `-`.
+  - **Failure handling:** every loop failure stops the remote command before `git switch` or `git merge`, and
+    nothing is ever deleted.
+  - **Review:** three fix rounds, including a throwaway-repository harness shaped like Alpine and a behavioral
+    test that runs the rendered command against a real git repository in a temporary directory.
+  - **Run:** it ran on Alpine at 751f386/d62c76e. The moved and copied files are in
+    `_moved_aside/20260911T200307Z/` and `_moved_aside/20260911T204249Z/` in the Alpine checkout.
