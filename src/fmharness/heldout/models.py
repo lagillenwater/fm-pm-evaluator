@@ -22,10 +22,12 @@ change for every drug and gene:
 Conventions every function shares. ``delta0`` is the answer array ``[L, D, G]`` with untested
 entries set to 0 (untested genes count as zero change in training); ``tested`` marks the entries
 the screen measured. Tuning losses are mean squared leave-one-out error over tested training
-entries only (invariant 7). Holding the drug average fixed at its full training value while
-tuning is the documented simplification of invariant 6. No function reads the hidden line's
-answers (invariant 1): training blocks are taken by indexing the training lines, and means
-over lines are masked sums that never add a line outside the mask.
+entries only (invariant 7). Each leave-one-out fit re-estimates the drug average without the
+left-out line, exactly and in closed form (invariant 6): an average held at its full training
+value would still contain the left-out line's answer, and a centred description hands that
+back to it at small penalties, so wide descriptions would look best on pure noise. No function
+reads the hidden line's answers (invariant 1): training blocks are taken by indexing the
+training lines, and means over lines are masked sums that never add a line outside the mask.
 
 At full size one array of departures (49 training lines x 107 drugs x ~45k genes) is ~1.9 GB of
 float64, so fits process drugs in blocks sized to a byte budget (``MAX_BYTES``). Every per-drug
@@ -79,8 +81,17 @@ class Fit:
 
 def drug_blocks(n_drugs: int, bytes_per_drug: int, max_bytes: int) -> list[tuple[int, int]]:
     """Consecutive ``(start, stop)`` drug ranges, each holding as many drugs as ``max_bytes``
-    allows at ``bytes_per_drug`` -- at least one, so a single drug is the smallest block."""
-    per_block = max(1, max_bytes // max(1, bytes_per_drug))
+    allows at ``bytes_per_drug``.
+
+    Raises ``ValueError`` when a single drug alone needs more than ``max_bytes``: a block cannot
+    be smaller than one drug, so the budget cannot be met.
+    """
+    if bytes_per_drug > max_bytes:
+        raise ValueError(
+            f"one drug needs {bytes_per_drug:,} bytes of working arrays, over the max_bytes "
+            f"budget of {max_bytes:,}"
+        )
+    per_block = max_bytes // max(1, bytes_per_drug)
     return [(start, min(start + per_block, n_drugs)) for start in range(0, n_drugs, per_block)]
 
 
@@ -102,9 +113,14 @@ def _check_square(matrix: np.ndarray, n_lines: int, name: str) -> None:
 
 
 def _check_lambdas(lambdas: np.ndarray) -> np.ndarray:
+    """The penalty grid as float64, checked: non-empty, 1-D, finite, positive, and strictly
+    increasing (``Fit.at_edge`` reads its ends as the smallest and largest penalty, and ties
+    go to the smaller penalty by position)."""
     grid = np.asarray(lambdas, dtype=np.float64)
     if grid.ndim != 1 or grid.size == 0 or not (np.isfinite(grid) & (grid > 0)).all():
         raise ValueError("lambdas must be a non-empty 1-D array of finite positive penalties")
+    if not (np.diff(grid) > 0).all():
+        raise ValueError("lambdas must be strictly increasing")
     return grid
 
 
@@ -213,17 +229,39 @@ def _training_eigen(kernel: np.ndarray, lines: np.ndarray) -> tuple[np.ndarray, 
 def _ridge_errors_op(u: np.ndarray, s: np.ndarray, lambdas: np.ndarray) -> np.ndarray:
     """Kernel ridge's exact leave-one-line-out error operator, ``[len(lambdas), T, T]``.
 
-    For departures ``R`` and penalty ``λ``, the dual coefficients are ``alpha = (K + λI)⁻¹ R``,
-    the fitted departures ``K alpha = H R`` with hat matrix ``H = U diag(s/(s+λ)) Uᵀ``, and the
-    training residual ``R - K alpha = U diag(λ/(s+λ)) Uᵀ R``. Line ``i``'s error when left out is
-    its residual divided by ``1 - h_i``, with ``h_i = Σ_a U[i,a]² s_a/(s_a+λ)`` -- exact for
-    ridge. The operator is that residual map with row ``i`` divided by ``1 - h_i``.
+    Applied along the line axis to the departures ``R`` from the drug average over all ``T``
+    training lines, it gives each training line's error when that line is left out of the fit
+    AND of the drug average, for every drug and gene at once.
+
+    Step 1, the average held fixed. For penalty ``λ`` the dual coefficients are
+    ``alpha = (K + λI)⁻¹ R``, the fitted departures ``K alpha = H R`` with hat matrix
+    ``H = U diag(s/(s+λ)) Uᵀ``, and the training residual ``R - K alpha = M R`` with
+    ``M = I - H = U diag(λ/(s+λ)) Uᵀ``. Ridge's leave-one-out shortcut, exact for any targets:
+    line ``i``'s error when left out of the fit is ``(M R)_i / (1 - h_i)``, and
+    ``1 - h_i = M_ii``. So ``E = diag(1/M_ii) M``.
+
+    Step 2, re-estimating the average without line ``i``. Fix one drug and gene; ``x_j`` is
+    line ``j``'s answer, ``m`` the mean over the ``T`` training lines, ``R_j = x_j - m``
+    (so ``Σ_j R_j = 0``). Without line ``i`` the average is
+    ``m₋ᵢ = (T·m - x_i)/(T-1) = m - R_i/(T-1)``, and the other lines' departures from it are
+    ``R_j + R_i/(T-1)``: the fixed-average targets plus the constant ``R_i/(T-1)``. Ridge's
+    prediction ``f_i`` for line ``i`` from the other lines is linear in their targets, so
+    ``f_i(R₋ᵢ + 1·R_i/(T-1)) = f_i(R₋ᵢ) + f_i(1)·R_i/(T-1)``, and line ``i``'s error is
+    ``x_i - m₋ᵢ - f_i(...) = [R_i - f_i(R₋ᵢ)] + R_i·[1 - f_i(1)]/(T-1)``. The bracket on the
+    left is ``e_i = (E R)_i``; ``1 - f_i(1)`` is line ``i``'s leave-one-out error when every
+    target is 1, i.e. ``(E·1)_i``. Hence ``e'_i = e_i + R_i·(E·1)_i/(T-1)``:
+    ``E' = E + diag(E·1)/(T-1)``. With the average held fixed instead, the other lines'
+    targets still sum to ``-R_i``, and a centred description's constant direction hands line
+    ``i``'s own answer back to it at small penalties.
     """
+    n_train = int(u.shape[0])
     penalty = lambdas[:, None]
-    shrunk = penalty / (s + penalty)
-    leverage = (s / (s + penalty)) @ (u**2).T
-    residual = np.matmul(u * shrunk[:, None, :], u.T)
-    return residual / (1.0 - leverage)[:, :, None]
+    residual_map = np.matmul(u * (penalty / (s + penalty))[:, None, :], u.T)
+    # 1 - h_i read off M's diagonal: subtracting h_i from 1 cancels digits when h_i is near 1.
+    errors = residual_map / np.diagonal(residual_map, axis1=1, axis2=2)[:, :, None]
+    diagonal = np.arange(n_train)
+    errors[:, diagonal, diagonal] += errors.sum(axis=2) / (n_train - 1)
+    return errors
 
 
 def _ridge_weights(
@@ -265,10 +303,11 @@ def ridge_lolo(
     (descriptions hold no drug response, so building it over every line reveals no answer).
     Departures from the training drug average are regressed on the description, for every drug
     and gene at once with one penalty shared by all of them: the penalty in ``lambdas`` with the
-    smallest exact leave-one-line-out loss. The prediction is the training drug average plus
-    ``k(held, train) (K_train + λI)⁻¹`` applied to the training departures -- ridge's
-    prediction in kernel form. Pass ``lambdas=np.array([λ])`` to fit at one penalty (a one-value
-    grid's choice is on both its edges, so that ``Fit.at_edge`` is True).
+    smallest exact leave-one-line-out loss, each left-out fit re-estimating the drug average
+    without its left-out line (``_ridge_errors_op``). The prediction is the training drug
+    average plus ``k(held, train) (K_train + λI)⁻¹`` applied to the training departures --
+    ridge's prediction in kernel form. Pass ``lambdas=np.array([λ])`` to fit at one penalty
+    (a one-value grid's choice is on both its edges, so that ``Fit.at_edge`` is True).
     """
     _check_answers(delta0, tested)
     n_lines = delta0.shape[0]
@@ -381,7 +420,10 @@ def nearest_lines_lolo(
     ``similarity`` is ``[L, L]`` (``similarity_from_description`` of the expression
     description). Tuning leaves each training line out in turn and predicts it by the mean of
     its k most similar other training lines; the candidate k with the smallest loss is chosen
-    (capped at one fewer than the training lines for this inner fit). The hidden line's
+    (capped at one fewer than the training lines for this inner fit). That prediction averages
+    other lines' raw answers and estimates no reference from all training lines, so the
+    left-out line's answer never enters its own prediction and nothing needs re-estimating
+    (unlike ridge's drug average). The hidden line's
     prediction is the mean over its k most similar training lines (capped at all of them).
     Neighbours are ranked by similarity, ties to the lower line index. ``Fit.k`` is the chosen
     candidate as given; ``Fit.lam`` is ``None``.

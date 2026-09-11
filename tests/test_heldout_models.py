@@ -15,6 +15,8 @@ Python ranking for nearest lines. Invariant 1 is checked by poisoning the hidden
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import numpy as np
 import pytest
 from sklearn.linear_model import Ridge
@@ -116,35 +118,40 @@ def test_ridge_lolo_equals_primal_ridge(lam: float) -> None:
 def _brute_force_lolo_losses(
     kernel: np.ndarray, delta0: np.ndarray, tested: np.ndarray, held: int, lambdas: np.ndarray
 ) -> np.ndarray:
-    """Tuning loss per penalty by refitting kernel ridge with each training line left out.
+    """Tuning loss per penalty by refitting everything with each training line left out.
 
-    Departures are from the drug average over all training lines, held fixed (invariant 6).
-    Each refit solves ``(K_rest + λI) alpha = R_rest`` directly -- no eigendecomposition, no hat
-    matrix -- batched over penalties and left-out lines at once.
+    For each left-out training line j (invariant 6): the drug average is recomputed over the
+    remaining training lines, their departures from it are formed, ridge is solved directly on
+    the remaining kernel (``np.linalg.solve`` of ``(K_rest + λI) alpha = R_rest`` -- no
+    eigendecomposition, no hat matrix), and line j is predicted as its re-estimated average
+    plus ``k(j, rest) alpha``. Batched over penalties and left-out lines at once.
     """
     train = _training_lines(kernel.shape[0], held)
     n_train = train.size
-    average = delta0[train].mean(axis=0)
-    departures = (delta0[train] - average).reshape(n_train, -1)
+    answers = delta0[train].reshape(n_train, -1)
     measured = tested[train].reshape(n_train, -1)
     k_train = kernel[np.ix_(train, train)]
     # row j: every training position except j
     rest = np.tile(np.arange(n_train), (n_train, 1))[~np.eye(n_train, dtype=bool)]
     rest = rest.reshape(n_train, n_train - 1)
+    rest_answers = answers[rest]
+    rest_average = rest_answers.mean(axis=1)
+    rest_departures = rest_answers - rest_average[:, None, :]
     k_rest = k_train[rest[:, :, None], rest[:, None, :]]
     k_left_out = np.take_along_axis(k_train, rest, axis=1)
     system = k_rest[None] + lambdas[:, None, None, None] * np.eye(n_train - 1)
-    alpha = np.linalg.solve(system, departures[rest][None])
-    refit_prediction = np.einsum("jm,ljmn->ljn", k_left_out, alpha)
-    errors = departures[None] - refit_prediction
+    alpha = np.linalg.solve(system, rest_departures[None])
+    refit_prediction = rest_average[None] + np.einsum("jm,ljmn->ljn", k_left_out, alpha)
+    errors = answers[None] - refit_prediction
     return (errors**2 * measured[None]).sum(axis=(1, 2)) / measured.sum()
 
 
 @pytest.mark.parametrize("width", [5, 30])
 def test_ridge_lolo_closed_form_loo_equals_refits(width: int) -> None:
     """Invariant 6: the closed-form leave-one-line-out loss at every penalty equals the loss
-    from refitting with each training line left out, to 1e-10 relative -- for a description
-    narrower than the training lines (rank-deficient kernel) and one wider (full rank)."""
+    from refitting with each training line left out of both the ridge fit and the drug average,
+    to 1e-10 relative -- for a description narrower than the training lines (rank-deficient
+    kernel) and one wider (full rank)."""
     description, delta0, tested = _random_grid(width=width)
     held = 7
     kernel = linear_kernel(description)
@@ -160,6 +167,37 @@ def test_ridge_lolo_closed_form_loo_equals_refits(width: int) -> None:
     fit = ridge_lolo(kernel, delta0, tested, held)
     assert fit.lam == LAMBDAS[int(np.argmin(brute))]
     assert fit.loss_min == pytest.approx(float(brute.min()), rel=1e-10)
+
+
+def test_lolo_tuning_does_not_reward_width_on_noise() -> None:
+    """Pure-noise answers (i.i.d. normal, variance 1, independent of a full-rank 400-column
+    description): tuning must not select the smallest penalty.
+
+    What the math guarantees. Line i's leave-one-out prediction puts weights c_i on the other
+    T-1 training lines' answers, summing to 1 (the re-estimated average plus a ridge term on
+    departures from it). With noise independent of the description, its expected squared error
+    is 1 + |c_i|², and |c_i|² is smallest, 1/(T-1), for the plain average, which the ridge term
+    vanishes toward as the penalty grows (expected loss -> 1 + 1/48 here). At the smallest
+    penalty ridge nearly interpolates 48 noisy lines and the weights spread. So in expectation
+    the loss at the smallest penalty is above the loss at the largest, and the smallest is not
+    chosen. Which of the nearly flat large penalties a finite sample picks is NOT guaranteed
+    (100 or 1,000 across seeds), so the test asserts only that the chosen penalty is not
+    ``LAMBDAS[0]`` and the ordering of the two ends. Holding the drug average fixed instead
+    (the reversed plan) selects ``LAMBDAS[0]`` here, with a loss near 0.3: the left-out line's
+    own answer leaking back.
+    """
+    rng = np.random.default_rng(17)
+    n_lines = 50
+    delta0 = rng.standard_normal((n_lines, 3, 300))
+    tested = np.ones(delta0.shape, dtype=bool)
+    kernel = linear_kernel(rng.standard_normal((n_lines, 400)))
+    held = 0
+
+    fit = ridge_lolo(kernel, delta0, tested, held)
+    assert fit.lam != LAMBDAS[0]
+    at_smallest = ridge_lolo(kernel, delta0, tested, held, lambdas=LAMBDAS[:1]).loss_min
+    at_largest = ridge_lolo(kernel, delta0, tested, held, lambdas=LAMBDAS[-1:]).loss_min
+    assert at_smallest > at_largest
 
 
 # ==============================================================================================
@@ -255,41 +293,48 @@ def test_similarity_is_pearson_correlation_of_standardized_descriptions() -> Non
 
 def test_drug_blocks_respect_the_budget() -> None:
     assert drug_blocks(7, 39_600, 100_000) == [(0, 2), (2, 4), (4, 6), (6, 7)]
-    assert drug_blocks(7, 10, 1) == [(i, i + 1) for i in range(7)]
+    assert drug_blocks(7, 10, 10) == [(i, i + 1) for i in range(7)]
     assert drug_blocks(7, 10, 10**9) == [(0, 7)]
+    with pytest.raises(ValueError, match=r"one drug needs 11 bytes.*max_bytes budget of 10"):
+        drug_blocks(7, 11, 10)
 
 
-@pytest.mark.parametrize("max_bytes", [1, 100_000])
-def test_chunked_fits_are_bit_identical(max_bytes: int, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("drugs_per_block", [1, 2])
+@pytest.mark.parametrize("model", ["ridge", "ridge_k", "nearest_lines"])
+def test_chunked_fits_are_bit_identical(
+    model: str, drugs_per_block: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each fit at the default budget (one block) equals, bit for bit, the same fit at a budget
+    holding ``drugs_per_block`` drugs of its most demanding pass (7 drugs: blocks of 1, or
+    uneven blocks 2, 2, 2, 1). A spy on ``drug_blocks`` reads each pass's per-drug size and
+    checks the blocks really split."""
     description, delta0, tested = _random_grid(n_drugs=7)
     held = 3
     kernel = linear_kernel(description)
     by_k = {k: description[:, :k] for k in (2, 3, 5)}
     similarity = similarity_from_description(description)
-    whole = [
-        ridge_lolo(kernel, delta0, tested, held),
-        ridge_lolo_k(by_k, delta0, tested, held),
-        nearest_lines_lolo(similarity, delta0, tested, held, ks=(2, 3, 5)),
-    ]
+    fits: dict[str, Callable[[int], Fit]] = {
+        "ridge": lambda budget: ridge_lolo(kernel, delta0, tested, held, max_bytes=budget),
+        "ridge_k": lambda budget: ridge_lolo_k(by_k, delta0, tested, held, max_bytes=budget),
+        "nearest_lines": lambda budget: nearest_lines_lolo(
+            similarity, delta0, tested, held, ks=(2, 3, 5), max_bytes=budget
+        ),
+    }
+    passes: list[tuple[int, int]] = []  # (bytes per drug, number of blocks), per call
 
-    block_counts: list[int] = []
-
-    def counting_blocks(n_drugs: int, bytes_per_drug: int, budget: int) -> list[tuple[int, int]]:
+    def recording_blocks(n_drugs: int, bytes_per_drug: int, budget: int) -> list[tuple[int, int]]:
         blocks = drug_blocks(n_drugs, bytes_per_drug, budget)
-        block_counts.append(len(blocks))
+        passes.append((bytes_per_drug, len(blocks)))
         return blocks
 
-    monkeypatch.setattr(models, "drug_blocks", counting_blocks)
-    chunked = [
-        ridge_lolo(kernel, delta0, tested, held, max_bytes=max_bytes),
-        ridge_lolo_k(by_k, delta0, tested, held, max_bytes=max_bytes),
-        nearest_lines_lolo(similarity, delta0, tested, held, ks=(2, 3, 5), max_bytes=max_bytes),
-    ]
-    assert max(block_counts) > 1  # the budget really split the drugs
-    if max_bytes == 1:
-        assert set(block_counts) == {7}
-    for a, b in zip(whole, chunked, strict=True):
-        _assert_same_fit(a, b)
+    monkeypatch.setattr(models, "drug_blocks", recording_blocks)
+    whole = fits[model](models.MAX_BYTES)
+    assert {n_blocks for _, n_blocks in passes} == {1}
+    budget = drugs_per_block * max(size for size, _ in passes)
+    passes.clear()
+    chunked = fits[model](budget)
+    assert max(n_blocks for _, n_blocks in passes) == -(-7 // drugs_per_block)
+    _assert_same_fit(whole, chunked)
 
 
 # ==============================================================================================
@@ -299,7 +344,8 @@ def test_chunked_fits_are_bit_identical(max_bytes: int, monkeypatch: pytest.Monk
 def test_at_edge_flags_a_choice_on_the_edge_of_its_grid() -> None:
     """A planted response on 5 of 10 description columns, with noise: tuning picks an interior
     penalty, k = 5 of {2, 5, 10}, and k = 3 of {1, 3, 8} nearest lines in clusters of 4. The
-    same data with the grid cut so that choice sits on its end is flagged; nothing else changes."""
+    same data with the grid cut so that choice sits on its bottom end, then on its top end, is
+    flagged both times; the choice itself does not change."""
     description, delta0, tested = _planted_grid(20, 4, 100, 10, 5, noise=1.0, seed=1)
     held = 0
     kernel = linear_kernel(description[:, :5])
@@ -308,14 +354,18 @@ def test_at_edge_flags_a_choice_on_the_edge_of_its_grid() -> None:
     assert interior.lam is not None
     assert LAMBDAS[0] < interior.lam < LAMBDAS[-1]
     assert not interior.at_edge
-    cut = ridge_lolo(kernel, delta0, tested, held, lambdas=LAMBDAS[interior.lam <= LAMBDAS])
-    assert cut.lam == interior.lam
-    assert cut.at_edge
+    bottom = ridge_lolo(kernel, delta0, tested, held, lambdas=LAMBDAS[interior.lam <= LAMBDAS])
+    assert (bottom.lam, bottom.at_edge) == (interior.lam, True)
+    top = ridge_lolo(kernel, delta0, tested, held, lambdas=LAMBDAS[interior.lam >= LAMBDAS])
+    assert (top.lam, top.at_edge) == (interior.lam, True)
 
-    middle_k = ridge_lolo_k({k: description[:, :k] for k in (2, 5, 10)}, delta0, tested, held)
-    assert (middle_k.k, middle_k.lam, middle_k.at_edge) == (5, interior.lam, False)
-    smallest_k = ridge_lolo_k({k: description[:, :k] for k in (5, 10)}, delta0, tested, held)
-    assert (smallest_k.k, smallest_k.lam, smallest_k.at_edge) == (5, interior.lam, True)
+    def ridge_over(ks: tuple[int, ...]) -> tuple[int | None, float | None, bool]:
+        fit = ridge_lolo_k({k: description[:, :k] for k in ks}, delta0, tested, held)
+        return fit.k, fit.lam, fit.at_edge
+
+    assert ridge_over((2, 5, 10)) == (5, interior.lam, False)
+    assert ridge_over((5, 10)) == (5, interior.lam, True)
+    assert ridge_over((2, 5)) == (5, interior.lam, True)
 
     rng = np.random.default_rng(3)
     cluster = np.repeat(np.arange(4), 4)
@@ -323,10 +373,14 @@ def test_at_edge_flags_a_choice_on_the_edge_of_its_grid() -> None:
     responses = rng.standard_normal((4, 3, 50))[cluster] + 0.5 * rng.standard_normal((16, 3, 50))
     all_tested = np.ones(responses.shape, dtype=bool)
     similarity = similarity_from_description(clustered)
-    middle_nn = nearest_lines_lolo(similarity, responses, all_tested, held, ks=(1, 3, 8))
-    assert (middle_nn.k, middle_nn.at_edge) == (3, False)
-    edge_nn = nearest_lines_lolo(similarity, responses, all_tested, held, ks=(3, 8))
-    assert (edge_nn.k, edge_nn.at_edge) == (3, True)
+
+    def nearest_over(ks: tuple[int, ...]) -> tuple[int | None, bool]:
+        fit = nearest_lines_lolo(similarity, responses, all_tested, held, ks=ks)
+        return fit.k, fit.at_edge
+
+    assert nearest_over((1, 3, 8)) == (3, False)
+    assert nearest_over((3, 8)) == (3, True)
+    assert nearest_over((1, 3)) == (3, True)
 
 
 # ==============================================================================================
@@ -356,6 +410,12 @@ def test_models_reject_malformed_inputs() -> None:
     kernel = linear_kernel(description)
     with pytest.raises(ValueError, match="lambdas"):
         ridge_lolo(kernel, delta0, tested, 0, lambdas=np.array([0.0, 1.0]))
+    with pytest.raises(ValueError, match="strictly increasing"):
+        ridge_lolo(kernel, delta0, tested, 0, lambdas=np.array([1.0, 0.1]))
+    with pytest.raises(ValueError, match="strictly increasing"):
+        ridge_lolo(kernel, delta0, tested, 0, lambdas=np.array([0.1, 0.1]))
+    with pytest.raises(ValueError, match="max_bytes budget of 1,000"):
+        ridge_lolo(kernel, delta0, tested, 0, max_bytes=1_000)
     with pytest.raises(ValueError, match="held line"):
         ridge_lolo(kernel, delta0, tested, 12)
     with pytest.raises(ValueError, match="tested"):
