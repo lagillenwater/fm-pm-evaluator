@@ -192,3 +192,13 @@ document they amend. `design.md` carries the current position.
     test that runs the rendered command against a real git repository in a temporary directory.
   - **Run:** it ran on Alpine at 751f386/d62c76e. The moved and copied files are in
     `_moved_aside/20260911T200307Z/` and `_moved_aside/20260911T204249Z/` in the Alpine checkout.
+- **2026-09-11** — **Amendment to the entry above: the line-hidden stand-in check is one-sided (gain ≤ MDE).**
+  - **Why:** Task 9's review reproduced a failing seed. At the top penalty a random stand-in predicts the drug
+    average plus a tiny noise fit, so its gain is a small, steady loss with a near-zero redraw spread. A
+    two-sided check then tests that loss rather than the split.
+  - **What the check guards against:** a random description gaining. That leak lies entirely above zero.
+  - **The other case:** the one defect a lower bound could catch, a penalty chosen too small, is already caught
+    by the null test's requirement that the stand-in's penalty sit at the top.
+- **2026-09-11** — **The two-way redraw reports both the variance ratio and its square root.**
+  - **Why:** the design says "report how much wider intervals get". The square root of the variance ratio is the
+    ratio of interval widths, and the variance ratio is kept as the design effect.
