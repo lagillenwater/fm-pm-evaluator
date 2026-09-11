@@ -119,7 +119,9 @@ per `docs/PROCESS.md` §1 and SPEC project rule 2.
   build's drug admission), `_compact_df` (Arrow dictionary encoding of the key columns),
   `mde_curve_table` (power against condition count), `effect_size_tercile_table` (the
   empirical control with intervals), `spearman_brown_or_nan` (the correction's guard at r = -1),
-  `write_audit_checksums` (the audit interface). Added on 2026-09-09: `split_assignment`,
+  `write_audit_checksums` (the audit interface) — the ones the audit found unnamed, not a
+  complete inventory, which `git diff 640a428..HEAD --stat -- scripts/delta_reproducibility.py`
+  is. Added on 2026-09-09: `split_assignment`,
   `slice_aggregate`, `frame_from_slice`, `noise_from_slice`, `pooled_plate_variance`,
   `dose_strata_table`, `run_slice`, `load_slices`, `write_noise_outputs`.
 - **2026-09-10** — **The permutation check runs 100 permutations, not 500**, at Lucas's direction
@@ -132,3 +134,23 @@ per `docs/PROCESS.md` §1 and SPEC project rule 2.
   effect to about ten percent and resolve p to 0.01, which is all a verdict this far from its null
   can use. Both gene sets run at 100 so the design states one number; the 500-permutation
   all-gene outputs are superseded and not kept.
+- **2026-09-10** — **The slices ran packed onto high-memory nodes**, at Lucas's direction ("pack
+  onto amem now"), by `scripts/alpine/rung0_slice_packed.sbatch`: three whole 1 TB `amem` nodes,
+  eleven slices each, in place of the thirty-two-task `acpu` array the design names. Reason: on
+  2026-09-10 the `acpu` partition held 1,353 pending jobs with 914 above this account's priority
+  and eight `amem` nodes sat idle; `amem` requires the `mem-normal` QoS and a job of 256 GB or
+  more (CURC Alpine hardware page), so an 84 GB slice cannot go there alone and a whole node is
+  taken instead. Billing weight 4.0 per core on `amem` against 1.0 on `acpu` makes the two
+  routes comparable per hour. The slices are the same processes with the same arguments and the
+  same cache; only the scheduler's packaging differs, which is why the design's chain text
+  stands and the packed script is recorded here as the route this run took. Along the way:
+  the assign stage at a 40 GB engine did not finish in 40 minutes on a day scratch read three
+  times slower than the day before (job 32365763), and the 60 GB engine that had taken 13 minutes
+  took 45 (job 32366450); wall time on this table is the filesystem's, not the code's.
+- **2026-09-10** — The three probe scripts of 2026-09-01 that measured the screen's dose design,
+  named here because the re-audit found them in no document: `rung0_crossing_probe.sbatch` (is
+  dose crossed with plate, or confounded with it), `rung0_dose_balance_probe.sbatch` (do the two
+  plate halves carry the same doses), `rung0_dose_levels_probe.sbatch` (which dose levels carry
+  the within-dose replication) — jobs 31996238, 31996294 and 31996456 in the 2026-09-01 reversal
+  entry. They are one-off measurements over the key columns, kept for the record of how the
+  confounding was found, and no rung's result is computed by them.

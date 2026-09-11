@@ -368,7 +368,7 @@ def fig_split(pool: pd.DataFrame, per_pair: pd.DataFrame, out: Path) -> Path:
         _note_empty(ax_sizes, "no conditions in the pool")
     ax_sizes.set_xlabel("replicate plates in the group (count)")
     ax_sizes.set_ylabel("conditions (count)")
-    ax_sizes.set_title("(a) group sizes: the one-plate-against-two imbalance", fontsize=9)
+    ax_sizes.set_title("(a) group sizes: one against one for nearly every triple", fontsize=9)
     _legend(ax_sizes, fontsize=8)
 
     scored = _finite(per_pair, "n_genes_scored")

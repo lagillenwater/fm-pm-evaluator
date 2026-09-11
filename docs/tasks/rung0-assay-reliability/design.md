@@ -55,9 +55,12 @@ is dominated by the genes that did not respond, sitting at zero plus noise, so i
 reproducibly the assay reports a mostly-null profile. Across the responding genes, it measures how
 reproducibly the assay reports the response itself.
 
-**Spearman-Brown, on both.** Dorrelations are reported raw and Spearman-Brown corrected, `2r / (1 + r)`.  Three quarters of conditions split one plate against two, so the corrected value is reported again over the conditions
-with an even plate count — where the split is exact and the correction is not an approximation —
-and the gap between the two is the size of the assumption.
+**Spearman-Brown, on both.** Correlations are reported raw and Spearman-Brown corrected,
+`2r / (1 + r)`. The correction assumes equal halves. Under the alternating split that is exactly
+an even plate count, which 7,491 of the 7,641 replicated triples have (7,441 with two plates,
+one against one; 50 with fourteen, seven against seven); the 150 three-plate triples split two
+against one. The corrected value is still reported again over the even-count subset, where the
+correction is exact, and the gap between the two is the size of the assumption.
 
 **Noise decomposition** `lfcSE` is the standard error
 of one plate's treated-versus-control contrast: cell-sampling error at that row's `n_cells_trt`
@@ -142,7 +145,7 @@ the machinery reads it correctly. Figures are produced by the run, not drawn by 
 - **split** — one condition becomes two half-profiles.
   - *positive*: a planted pool splits into two populated groups.
   - *negative*: a single plate cannot split and yields no scoreable conditions.
-  - *figures*: histogram of the two group sizes, which shows the one-plate-against-two imbalance. Histogram of the number of genes
+  - *figures*: histogram of the two group sizes, which shows how nearly every replicated triple splits one plate against one and where the three-plate triples do not. Histogram of the number of genes
     finite in both halves per condition, with the 50-gene scoring threshold marked.
 - **select** — the responder set, chosen from the first half alone.
   - *positive*: with responders planted in a known subset of genes and `padj` planted to match,

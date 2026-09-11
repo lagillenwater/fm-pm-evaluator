@@ -511,15 +511,339 @@ Dispositions: 20 fixed, 0 recorded, 1 ruled not a defect, 0 still open.
 - **D96** — fixed — `8861eb8` gave the permutation job the build cache, and `a1dcff5` replaced the single job with the declared chain: `design.md:269-277` now states three jobs (`rung0_assign`, the sixteen-task `rung0_slice` array, `rung0_combine`) and that `permutation_null.py` "reads the same cache"; `permutation_null.py:441-452` takes `--cache-dir`/`--slices` and `permutation_null.sbatch:37-43` passes both, so no full scan is repeated. `submit_rung0_chain.sh` submits `permutation_null.sbatch` as the chain's fourth stage since 2026-09-09, dependent on the combine job, and the job script's comments name the combine job rather than the removed `delta_reproducibility.sbatch`.
 - **D97** — fixed — `8861eb8`; `permutation_null.py:423-430` defaults `--drugs-cid-file` to `""` with the reason in its help text, and `permutation_null.sbatch:37-43` passes no drug or panel file, so the check scores the same full-extent pool the reliability does.
 - **D102** — fixed — `7f5b39e` added `noise_by_condition` and answering cells printing HELD / DID NOT HOLD for hypotheses 3 and 4 from `rung0_noise_by_condition.csv`. The wording drift closed on 2026-09-09 with the summary rewrite (`1836815`): the four hypotheses are carried over verbatim from `design.md`, "Expected result", and hypothesis 3's answering cell tests both the all-gene and the responder correlation against each triple's replicate variance.
-- **D109** — fixed — `008f943`; `design.md:309` no longer claims three additions: it names the select and decompose steps, the figures, their supporting tables, the engine-side noise aggregation and the scatter-based pivot, and points to `decisions.md` for the rest. The pointer was only partly honoured — the 2026-09-01 entries recorded the SQL admission rule and the Arrow encoding but not `mde_curve_table`, `effect_size_tercile_table`, `spearman_brown_or_nan` or `write_audit_checksums` — until a 2026-09-09 entry in `decisions.md` names every function the port added and every one added since.
+- **D109** — fixed — `008f943`; `design.md:309` no longer claims three additions: it names the select and decompose steps, the figures, their supporting tables, the engine-side noise aggregation and the scatter-based pivot, and points to `decisions.md` for the rest. The pointer was only partly honoured — the 2026-09-01 entries recorded the SQL admission rule and the Arrow encoding but not `mde_curve_table`, `effect_size_tercile_table`, `spearman_brown_or_nan` or `write_audit_checksums` — until a 2026-09-09 entry in `decisions.md` names the four the audit found unnamed and the functions added on 2026-09-09, pointing at the diff for the complete inventory rather than claiming one.
 
 ---
 
 ## Re-audit
 
-**Not started. Awaiting the fix wave.**
+**Date** 2026-09-10
+**Commit audited** `ae12f6f` (branch `rung0-assay-reliability`; `git rev-parse --short HEAD`). I began
+reading at `6f2904f`; `ae12f6f` (100 permutations, not 500: `design.md`, `decisions.md`, one line of
+`permutation_null.sbatch`) landed while I was reading, and every verdict below was re-checked against it.
+The run's artifacts are uncommitted in the working tree, and `docs/tasks/rung0-assay-reliability/verification.md`
+and the `docs/STATE.md` edit are likewise uncommitted.
+**Auditor** A fresh reader. I did not write this code or these documents and I worked from the tree,
+not from the conversation that produced it. No git command that changes state was run; no file other
+than this one was modified.
+**What was read** `docs/audit.md`; this file's clause tables, PENDING RUN section and "Fix wave";
+`design.md`, `decisions.md` (the 2026-09-09 and 2026-09-10 entries in full), `review.md`,
+`verification.md`, `docs/SPEC.md` rung 0, `docs/STATE.md`, `docs/DATA.md:40-97`; the run's tables,
+sidecars, `audit_checksums.json` and figures (`01`–`11` viewed as images); the run logs under
+`results/rung0-assay-reliability/logs/` (assign 32366450, the packed slices 32369084, combine
+32378445); and, for each drift item, the function or line the fix-wave bullet names, read in the
+current tree. Every number below was read from a file named beside it or recomputed from one.
+**The cap** Per `docs/audit.md`, "The cap", I re-checked only the 21 items verdicted DRIFT at
+`c3e55b2` plus the PENDING RUN section. I did not re-enumerate the design. What I noticed on the
+way that lies outside those items is under "Found while reading", not verdicted.
 
-A second fresh reader re-checks **only** the twenty-one items verdicted DRIFT above
-(`docs/audit.md`, "The cap" — the re-audit does not re-enumerate the design), plus the PENDING RUN
-section once the run's artifacts exist, and records its own verdict with the artifacts' checksums.
-**The audit is not passed until the re-audit says so.**
+**Commands run**
+
+```
+$ uv run python scripts/verify_rung0.py
+72 / 74 checks pass (3 skipped, 77 total)
+$ uv run pytest -q
+155 collected: 154 passed, 1 failed (tests/test_verify_rung0.py::test_the_committed_cluster_run_verifies,
+which runs the battery and inherits its two promotion FAILs below); no skips
+$ python3  # hashlib over docs/tasks/rung0-assay-reliability/audit_checksums.json
+entries 40, match 40
+```
+
+### The 21 drift items
+
+- **D6** — **FIXED.** `docs/DATA.md:91-97` states the 32-drug list as a later rung's restriction and says
+  "Rung 0 does not use it ... the superseded rung's '1,600 scored pairs' describes that restricted pool, not
+  this one"; `docs/DATA.md:68-69` gives 50 lines and 379 drugs, both exact. The tranche record
+  `data/tranches/tahoe100m-pseudobulk-de.v1.json` now reads `drug_count: 379` with a description saying it
+  is "not a declared panel" (the fix-wave bullet's 391 was replaced at `8c240eb`). I recounted 379 distinct
+  drugs in `rung0_split_assignment.csv` and 50 distinct lines. `content_hash` is unchanged and the battery
+  recomputes it from the manifest.
+- **D8** — **FIXED.** `design.md:23-27` names four statistics keyed by five columns, "Nine columns of the
+  sixteen", and lists the six not read. The code reads exactly those nine: `Cell_ID_DepMap`, `drug`,
+  `gene_name`, the dose column and the plate column in `split_assignment` and `slice_aggregate`
+  (`delta_reproducibility.py:247`, `:398`), `log2FoldChange` (`:399-405`), `padj` (`:388-389`), `lfcSE`
+  (`:390`), `baseMean` (`:391`, `:242`). The dose column resolves through `DOSE_CANDIDATES` (`:52`), which
+  includes `concentration`, the name `docs/DATA.md:43` gives the table.
+- **D22** — **FIXED.** `noise_partials` writes `between_plate_fraction_pooled` and, at
+  `delta_reproducibility.py:698`, `between_plate_fraction_pooled_over_conditions`; `design.md:77-80`
+  declares both weightings. `rung0_noise_decomposition.csv` carries both (0.0 pooled over 174,564,006
+  gene-conditions; 0.019476 as the mean of 7,641 per-condition shares), and the battery recomputes each
+  from `rung0_noise_by_condition.csv` ("the over-conditions share is the mean of the per-condition pooled
+  shares", PASS).
+- **D29** — **FIXED.** `design.md:90-92` states the rule and its consequence; `split_assignment` assigns
+  `(row_number() OVER (PARTITION BY patient, drug, dose ORDER BY plate) - 1) % 2`
+  (`delta_reproducibility.py:256`, `:271`) and the slice aggregation keeps a group only with a fold change on
+  both sides (`HAVING`, `:416-417`). On the artifacts the consequence is true: of the 7,641 rows of
+  `rung0_pool_description.csv` with `n_plates >= 2`, 7,641 have `n_plates_half0 > 0` and
+  `n_plates_half1 > 0`, and `rung0_per_pair_r.csv` has 7,641 rows. The battery checks the alternation on
+  all 65,218 (triple, plate) rows (PASS).
+- **D30** — **FIXED.** `summary.ipynb` cell 2, `table()`: `kw.setdefault("keep_default_na", False)` and
+  `kw.setdefault("na_values", [""])` before `pd.read_csv`. Read that way, `rung0_pool_description.csv` and
+  `rung0_per_pair_r.csv` each carry 50 distinct `patient` keys and the literal string `NA` is one of them;
+  the dose figure (`10_dose.png`) shows `NA` as a line on its axis. The count clause holds; see the PENDING
+  RUN table.
+- **D35** — **FIXED.** `main` writes the strided real fold changes to `rung0_delta_sample.csv.gz`
+  (`delta_reproducibility.py:1994`) before `fig_build` draws them (`:2118`). The file is in the task folder
+  and is entry 15 of `audit_checksums.json`.
+- **D39** — **FIXED.** `summary.ipynb` shows, in order, `01_build`, `02_split`, `03_select`, `04_score`,
+  `05_decompose`, `06_null`, `09_per_gene_reliability`, `11_permutation_vs_bootstrap` (and the responder
+  variant when its table exists), `10_dose`, `07_terciles`, `08_power` (cells 7, 9, 11, 14, 16, 20, 22, 23,
+  26, 29, 30). Every figure the run writes is met, including the per-gene diagnostic, and the second null
+  figure (D74) is now produced and shown. The dose step, added to the design on 2026-09-09, sits after null
+  as `design.md:196-205` orders it.
+- **D44** — **FIXED.** `split_assignment` computes `frac_untestable` as the row-weighted mean of
+  `baseMean = 0` (`delta_reproducibility.py:242`, `:248`, `:269`); `figures.py:268` and `:320` read it.
+  `rung0_pool_description.csv` carries the column on all 56,827 rows (mean 0.591, which agrees with the
+  59% `baseMean`-zero figure in `docs/DATA.md:88`), so the panel is drawn on the real run.
+- **D56** — **FIXED.** `fig_select` draws panel (d) from `overlap["jaccard"]` with the median marked and a
+  title reading "diagnostic; never an input to selection" (`figures.py:492-513`); `03_select.png` shows it
+  ("median 0.11 over 7,468 conditions"). `rung0_responder_overlap.csv` has 7,641 rows, `jaccard` finite on
+  7,468 (the rest have an empty union), and the battery checks its set identities row by row (PASS).
+- **D60** — **FIXED.** `rung0_example_pair_profiles.csv.gz` carries `is_responder` per plotted gene;
+  `fig_score` reads it (`figures.py:606`) and draws one scatter row per gene set (`:638`). `04_score.png`
+  shows two rows of four scatters, "all genes" and "responders", each with its own r and n printed.
+- **D63** — **FIXED.** `fig_score` splits `control_per_pair` on its `control` column (`figures.py:723-724`)
+  and draws the two pools as separate histograms with their expected values marked (`:694-733`);
+  `04_score.png`'s bottom panel shows "positive (planted r = 0.5) (n=200)" at its half-length value
+  0.333 and "negative (no signal) (n=200)" at zero. `rung0_control_per_pair.csv` has 400 rows, 200 per pool.
+- **D70** — **RULED, and recorded.** The "Each with its control pool beside it" sentence is gone;
+  `design.md:181-187` declares the control for panel (a) only, with the identity line as the scatter's null
+  and the strata panels read from the committed table. `decisions.md`, 2026-09-09 ("The decompose figure's
+  control sits beside panel (a) only"), states the change and why. `fig_decompose` (`figures.py:868`;
+  control panel at offsets `:47-61` of the function) draws exactly that, and `05_decompose.png` shows it:
+  real screen, control planting 0.5 (pooled 0.497 over 80,000 rows), scatter with identity line, two strata
+  panels.
+- **D74** — **FIXED, with the artifact pending.** `permutation_null.py:568-574` calls
+  `fig_permutation_vs_bootstrap` and writes `figures/11_permutation_vs_bootstrap<suffix>.png`;
+  `verify_rung0.py:81-82` requires both permutation figures and `:90-91` keys each to its summary table so
+  the responder one is expected only once that stage ran. `11_permutation_vs_bootstrap.png` is present and
+  shows the permutation null beside the bootstrap's sampling distribution with the design effect printed.
+  But the figure and the tables it was drawn from are the 500-permutation all-gene run (job 32369086,
+  `rung0_permutation_summary.params.json` `git_sha` `9fb9b02`), which `decisions.md`, 2026-09-10, declares
+  superseded by a 100-permutation rerun of both gene sets. The fix is in the code; the artifact that will
+  stand is pending.
+- **D75** — **FIXED.** `check_significance` (`verify_rung0.py:350-420`) re-derives `p_vs_null` and
+  `p_vs_same_drug` for both gene sets from `rung0_null_draws.csv`; the battery prints "p_vs_null re-derived
+  from the committed draws" and "p_vs_same_drug re-derived from the committed draws" as PASS for `all` and
+  `responder`. `check_exports` (`:689`) reads `rung0_mde_curve.csv` ("the MDE curve's observed row is the
+  summary's count and MDE": 7,641 / 0.0179 and 6,654 / 0.1135, PASS) and `rung0_responder_overlap.csv`
+  (PASS).
+- **D78** — **FIXED.** `_refuse_if_checksums_moved` (`scripts/promote_result.py:62-97`) is called from
+  `promote` (`:152`), and `:146-151` default the record to `audit_checksums.json` beside the result when it
+  exists, so the refusal is on unless a caller points elsewhere. The battery closes the chain:
+  `check_audit_checksums` (`verify_rung0.py:1021`) recomputed all 40 entries (PASS) and `check_promotion`
+  (`:1147`) requires the promoted copy byte-identical and the record's `code_commit` equal to the sidecar's
+  `git_sha`.
+- **D79** — **FIXED.** The three refusals are at `promote_result.py:77-81` (record missing), `:85-89`
+  (artifact not in the record) and `:91-97` (checksum moved), pinned by
+  `tests/test_promote_result.py:162` and `:192`; both tests pass in the suite run above.
+- **D83** — **FIXED.** `rung0_example_pair_index.csv` carries `n_responders_shown` and `r_responder_full`
+  beside `r_full`/`r_shown` (written at `delta_reproducibility.py:1250-1251`). I recomputed both
+  correlations from `rung0_example_pair_profiles.csv.gz` for all six examples: every `r_full` and every
+  `r_responder_full` reproduces to the printed four decimals (for example `matched_q50`: 25,407 genes,
+  0.0627; 401 responders, 0.7563). The battery's "8 of 8 reproduce" covers the figure's values table.
+- **D96** — **FIXED as to the chain; one job script undeclared.** `design.md:274-283` declares
+  assign, a thirty-two-task slice array, combine, then the permutation check reading the same cache;
+  `submit_rung0_chain.sh` submits those four stages with `afterok` dependencies read back;
+  `permutation_null.sbatch:37-43` passes `--cache-dir` and `--slices` and no drug or panel file; the
+  permutation sidecar records `cache_dir` `rung0_cache_v3b`, `slices` 32. No full scan is repeated. The
+  slices that actually ran are `rung0_slice_packed.sbatch` (a 3-task `amem` array running eleven slices
+  each, logs `rung0-slice-packed-32369084_{0,1,2}.out` plus 32 per-slice logs), the same `--stage slice`
+  processes over the same 32 gene partitions. `verification.md` records this; `design.md` and
+  `decisions.md` do not name the script. Listed under "Found while reading".
+- **D97** — **FIXED.** `permutation_null.py:423-424` defaults `--drugs-cid-file` to `""`; the sbatch passes
+  none; `rung0_permutation_summary.params.json` records `drugs_cid_file: ""` and `n_pairs 7641`, and its
+  `observed_mean` 0.0649 equals the mean of `r` in `rung0_per_pair_r.csv` (0.06486), so the check scored the
+  reliability's pool.
+- **D102** — **FIXED.** `summary.ipynb` cell 3 carries the four hypotheses word for word from
+  `design.md:303-306` (compared by eye, including "over either all genes or the differentially expressed
+  genes"); cell 18 answers hypothesis 3 for both `r` and `r_responder` against each triple's replicate
+  variance and hypothesis 4 per triple; cell 32 restates 1 and 2 with numbers. That hypothesis 4's answer
+  depends on the aggregate is under "Found while reading".
+- **D109** — **FIXED.** `design.md:315` no longer claims three additions; it names the categories and
+  points to `decisions.md`. The 2026-09-09 entry names 16 functions. I diffed the `def` lines against the
+  port commit `640a428`: 42 functions were added since the port, the 16 named are all present, and 26 are
+  not named — private helpers and the assignment read/write and noise-combination family
+  (`write_assignment`, `read_assignment`, `_ensure_assignment`, `normalise_dose`, `combine_noise_partials`,
+  `_pooled_from_sums`, `noise_strata_from_sample`, `_write_split_tables`, and the select/decompose
+  functions the design's row covers in prose). The false completeness claim is gone, which is what D109
+  found; the fix-wave bullet's "every one added since" overstates what the entry does.
+
+### PENDING RUN — checked against the artifacts
+
+| # | Claim | Read from the artifacts | Verdict |
+|---|---|---|---|
+| D17 | Three quarters of conditions split one plate against two | `rung0_pool_description.csv`, rows with `n_plates >= 2`: 7,441 of 7,641 have two plates (1 against 1), 150 have three (2 against 1), 50 have fourteen (7 against 7). One-against-two is 2.0% of conditions, not three quarters. `design.md:113` states the 7,441 correctly; `design.md:58` still says "Three quarters of conditions split one plate against two", `design.md:145` still promises a figure showing "the one-plate-against-two imbalance", and `figures.py:371` titles panel (a) of `02_split.png` that way. Nothing in `decisions.md` records the sentence as the superseded pool's. | **DRIFT** — does not hold; unrecorded |
+| D30 (count) | Fifty cell-line keys, one of them the literal `NA` | `rung0_pool_description.csv` read with `keep_default_na=False`: 50 distinct `patient` values, `NA` among them; same in `rung0_per_pair_r.csv` and `rung0_split_assignment.csv` | holds |
+| D99 | Three results promoted | `results/rung0-assay-reliability/` holds one table and one record, both from the dose-pooled run of 2026-09-02 (`rung0_reliability.csv` at 1,276 bytes, `promoted_at` 2026-09-02); nothing from this run is promoted | pending (gate 2) |
+| D100 | Each provenance record's inputs are the tranche hash and nothing else | The one record present has `inputs: {tranche_manifest: 9a8797a5...}` only — but it is the superseded record; this run's records do not exist | pending |
+| D101 | Arguments carry the inclusion choices and the selection rule | `rung0_reliability.params.json` carries `selection_rule`, `gene_inclusion`, `drug_inclusion`, `dose_handling`, `split_rule`, `weighting` and `padj_threshold 0.05`, so the material is there; whether it reaches a record cannot be checked until promotion | pending |
+| D104 | All-gene correlations low | `rung0_reliability.csv`: `all_splithalf_mean_r` 0.065, median 0.063, quartiles 0.019–0.090 | holds |
+| D105 | Responder correlations higher than all-gene | `responder_splithalf_mean_r` 0.430 against 0.065; per dose (`rung0_dose_strata.csv`) 0.136 / 0.035 / 0.577 against 0.029 / 0.024 / 0.081 | holds |
+| D106 | Noise higher where correlations are lower | Spearman between each triple's `var_lfc_mean` (`rung0_noise_by_condition.csv`) and its `r` / `r_responder` (`rung0_per_pair_r.csv`), joined on (line, drug, dose): −0.515 over 7,641 and −0.494 over 6,654; against `between_plate_fraction_pooled`: −0.213 and −0.232 | holds |
+| D107 | Aggregate noise higher in responders than over all genes | Pooled over gene-conditions (`rung0_noise_decomposition.csv`): `var_lfc_mean_responders` 3.669 against 1.497 for all genes, and between-plate share 0.737 against 0.000 — holds. Per triple (`rung0_noise_by_condition.csv`): responders' mean variance 1.124 against non-responders' 1.422, responders noisier in 8.1% of 7,381 triples — does not hold, and that is the test `summary.ipynb` cell 18 prints | holds under the pooled aggregate the decomposition table reports; not under the per-triple test the summary prints; see "Found while reading" |
+| S11 | Both ceilings significantly above the mismatched-pair null | `all_p_vs_null` 0.0005, `all_p_vs_same_drug` 0.0005 (floors 0.017, 0.042; observed 0.065); `responder_p_vs_null` 0.0005, `responder_p_vs_same_drug` 0.0005 (floors 0.106, 0.257; observed 0.430). The battery re-derives all four from the 2,811 committed draws. Permutation, all genes (500, superseded): `p_exact` 0.002, observed above the largest of 500 permutation means (0.0199), design effect 0.783 | holds on the bootstrap; permutation pending for both gene sets at 100 |
+
+The two further things the section asked the run to be read for:
+
+- **The permutation job scored every drug.** `rung0_permutation_summary.params.json`: `drugs_cid_file ""`,
+  `n_pairs 7641`; the observed mean equals the reliability's. Holds for the 500-permutation run; to be
+  re-read when the 100-permutation outputs land.
+- **The dose column resolved.** The combine log (`results/rung0-assay-reliability/logs/rung0-combine-32378445.out`)
+  carries no "no dose column" warning; every committed table keys on `dose` with three levels
+  (0.05, 0.5, 5.0); `rung0_noise_strata.csv` and `rung0_dose_strata.csv` are dose-keyed. Holds.
+
+**The rest of what the section asked for, read from the artifacts.**
+
+- *Condition counts.* 56,827 (line, drug, dose) triples in `rung0_pool_description.csv`, 49,186 on a
+  single plate (86.6%), 7,641 replicated (`rung0_split_assignment.csv`: 65,218 (triple, plate) rows).
+  Scored: 7,641 all-gene, 6,654 responder (`rung0_per_pair_r.csv`, finite `r` and `r_responder`;
+  `rung0_reliability.csv` `all_n_pairs`, `responder_n_pairs`). 47,014 genes scored; the responder set
+  averages 949 genes per condition (combine log). 121 drugs and 50 lines in the replicated base.
+- *The split.* Both halves populated on 7,641 of 7,641 replicated triples. `n_plates_even` equals
+  `(n_plates % 2 == 0)` and equals `(n_plates_half0 == n_plates_half1)` on every row; 7,491 even
+  (7,441 two-plate + 50 fourteen-plate), which is `all_n_pairs_even`; 6,518 of them scored on
+  responders, which is `responder_n_pairs_even`.
+- *The two reliabilities.* All genes: mean r 0.0649 (reported 0.065), Spearman-Brown `2r/(1+r)` =
+  0.1218 (reported 0.122); even-plate subset 0.0657 → 0.1233 (reported 0.066 / 0.123). Responders:
+  0.4296 → 0.6010 (reported 0.43 / 0.601); even-plate 0.4366 → 0.6078 (reported 0.437 / 0.608). All
+  recomputed from `rung0_per_pair_r.csv`; `frac_pos` 0.866 and 0.817 recompute.
+- *Null floors and p-values.* From `rung0_null_draws.csv` (2,811 draws): all genes any-pair 0.0189 /
+  diff-drug 0.0166 / same-drug 0.0423 over 500 each; responders 0.1013 / 0.1063 / 0.2570 over 440 /
+  431 / 440. `null_n_draws` is the diff-drug count (500, 431). All four p-values 0.0005; MDEs at 80%
+  power 0.0179 / 0.0443 (all) and 0.1135 / 0.2662 (responders), each below its observed mean.
+- *Noise decomposition, pooled shares.* All genes 0.000 (var 1.497 below mean `lfcSE^2` 2.858, floored
+  once); responders 0.737 (3.669 against 0.965 over 7,248,640 gene-conditions); non-responders 0.000;
+  over conditions 0.0195; 2.1% of conditions plate-dominated; estimator string in the sidecar matches
+  `design.md:67-68`. Strata: the share rises with expression quartile (0.000, 0.104, 0.204, 0.369 as the
+  figure's panel (c) prints) and is 0 in every response-size quartile pooled over expression.
+- *Tercile control, both rankings.* `rung0_effect_terciles.csv`: ranked by half 0, 0.0501 → 0.0698 →
+  0.0746; by half 1, 0.0607 → 0.0613 → 0.0727. Both rise (the battery recomputes both, PASS); the half-1
+  step from tercile 1 to 2 is 0.0006 with overlapping intervals.
+- *Dose strata.* `rung0_dose_strata.csv`, 10 rows: per triple at 0.05 / 0.5 / 5.0 uM, all triples equal
+  weight, and per (line, drug) pair, for both gene sets; the all-triples row is the summary row (0.0649,
+  0.4296) and the per-pair rows are 0.0766 (5,891 pairs) and 0.5249 (5,128). The 5.0 uM stratum carries
+  5,396 of 7,641 triples (71%).
+- *Figures.* Eleven PNGs `01`–`11` plus `04_score.values.csv.gz`, all present, all in the checksum
+  record; `11_permutation_vs_bootstrap_responder.png` absent as expected.
+- *Sidecars.* `rung0_reliability.params.json` and `rung0_noise_decomposition.params.json`: `git_sha`
+  `6f2904fea6f88c4a0c51b38526d27a28f9eb74ca`, `slurm_job_id` 32378445, `split_rule` "plates sorted by id
+  as text within each (line, drug, dose) triple, assigned alternately", `dose_handling` "held fixed: a
+  condition is a (line, drug, dose) triple and the split is between that triple's plates".
+  `rung0_permutation_summary.params.json`: `git_sha` `9fb9b02...`, job 32369086 — three commits earlier
+  than the combine; `git diff 9fb9b02..6f2904f` touches dose rounding and text plate-sort in the committed
+  tables, progress printing and the permutation sbatch's gene-set loop, nothing the permutation computes.
+
+**The battery.** `uv run python scripts/verify_rung0.py`: **72 PASS, 3 SKIP, 2 FAIL** (77 total). The
+skips are the responder permutation's three checks, whose tables are not written. The FAILs:
+
+1. `promoted copies are byte-identical to the task-side tables` — `results/rung0-assay-reliability/rung0_reliability.csv`
+   differs from the task-side table.
+2. `promoted provenance names the commit the run was made at` — the record names `92407c1`, the sidecar
+   of the run it points at says `5192606`, and this run's is `6f2904f`.
+
+Both are the same thing: the promoted copy under `results/rung0-assay-reliability/` is the superseded
+dose-pooled promotion of 2026-09-02 (its own `dose_handling` field says "POOLED -- superseded"), whose
+provenance names the promotion-time commit rather than the run's. They are not a defect of this run.
+**OPEN: whether that promotion is withdrawn or re-promoted with the corrected commit is a decision
+that has not been made** (`review.md`, "Remains" under the first P1; `verification.md`, "Open").
+
+### Found while reading
+
+Outside the cap; listed, not verdicted, except where it is the D17 finding above.
+
+- **`design.md:58` and `:145` describe the hash-split pool.** "Three quarters of conditions split one plate
+  against two" and "the one-plate-against-two imbalance" are false on this run (2.0% split one against two;
+  97.4% one against one) and contradict `design.md:113` in the same document. `figures.py:371` carries the
+  same title, and `02_split.png` panel (a) is drawn over all 56,827 triples, so what it actually shows is
+  the 49,186 unsplittable triples (group 2 at zero) beside the 7,641 that split one against one — an
+  informative picture with the wrong caption. This is D17's DRIFT.
+- **`verification.md`'s "What the run says" table does not match the committed tables.** It gives the
+  equal-halves subset as "7,491 triples, 0.065" and "6,517, 0.431", the different-drug floor as 0.019 and
+  the same-drug floor as 0.044 for all genes; `rung0_reliability.csv` says 0.066, 6,518 / 0.437, 0.017 and
+  0.042 (0.019 is the any-pair floor). The numbers look like the first-pass combine (32369085), before
+  `3121b65` fixed the dose join; the document is dated the same day as the second combine and should be
+  reread against it.
+- **Hypothesis 4 is answered two ways.** Pooled over gene-conditions the responders are noisier (share
+  0.737 against 0.000; variance 3.669 against 1.497); per triple they are not (noisier in 8.1% of 7,381
+  triples), and `summary.ipynb` cell 18 prints the per-triple verdict, DID NOT HOLD, while `verification.md`
+  and the decomposition table carry the pooled one. The design's word "aggregate" does not say which. The
+  summary should say that both are true and why they differ (a few high-response triples carry most of the
+  responder gene-conditions), not pick one.
+- **`summary.ipynb` cell 34 says "The design had passed a drift audit."** It had not: this file's audit at
+  `c3e55b2` found 21 drift items and its re-audit had not started. `review.md` ("The audit gate has not
+  passed", Done) says the false sentence would go with the notebook rewrite; a softened form survived.
+- **The permutation artifacts in the tree are declared superseded.** `rung0_permutation_summary.csv` and
+  its three `perm_means` files are the 500-permutation all-gene run; `decisions.md`, 2026-09-10, cuts the
+  check to 100 for both gene sets and says the 500-permutation outputs "are not kept". `11_permutation_vs_bootstrap.png`
+  (18:43) was drawn against the first combine's null draws, which the second combine rewrote at 20:14 —
+  the bootstrap centre it prints, 0.0166, equals the current diff-drug floor, so nothing visible moved, but
+  the figure predates the table it is read beside. The final combine `verification.md` names (32378578)
+  will rewrite `audit_checksums.json`, so the checksums below bind the artifacts as read today, not the
+  set that will be committed.
+- **`scripts/alpine/rung0_slice_packed.sbatch` is the job that ran and is named in no design or decision
+  entry** (commit `9fb9b02` only; `verification.md` records it). `rung0_crossing_probe.sbatch`,
+  `rung0_dose_balance_probe.sbatch` and `rung0_dose_levels_probe.sbatch` are the three probes the
+  2026-09-01 reversal cites by job id, likewise unnamed by path.
+- **The `decisions.md` function list (D109) names 16 of the 42 functions added since the port.** The
+  design's pointer is honest about categories; the fix-wave bullet's "every function" is not.
+- **`rung0_permutation_summary.csv` says `n_perm 500` while `design.md:264` now says 100.** Consistent
+  with the superseding decision, inconsistent as a committed pair; resolved when the rerun lands.
+
+### Checksums
+
+I read `docs/tasks/rung0-assay-reliability/audit_checksums.json` (written by the combine job 32378445 at
+20:15 on 2026-09-10): **40 entries**, one per artifact, figures included. I recomputed sha256 for every
+entry with `hashlib` over the files in the task folder and its `figures/` subfolder: **40 of 40 match**.
+The record does not cover itself or the documents (`audit.md`, `decisions.md`, `design.md`, `plan.md`,
+`review.md`, `verification.md`, `summary.ipynb`, `verify.ipynb`), which is correct. In full:
+
+| sha256 | File |
+|---|---|
+| `aaad7e95390be58e94f9479f46abb5984a8104db8a341bf2f98fe3d57661bfba` | `rung0_reliability.csv` |
+| `9ad3713d005d0989f7d55c8b6281a2b411c67dd453faa5f3e89e4787902011bf` | `rung0_per_pair_r.csv` |
+| `0726f384f1cbf02b4d77f08f12ca9aa9e87bbefe401673dd8d61355fae93e9e5` | `rung0_dose_strata.csv` |
+| `a4fd1f0475480c76a5baee620fb4a5c82b1d189ee9e8b212a6fc23375dd9385a` | `rung0_noise_decomposition.csv` |
+| `d87c0521cd92c4a08057e0cad331c929fc58c65d31074433aba8b9f5f446254f` | `rung0_split_assignment.csv` |
+
+For the record beside them: `rung0_reliability.params.json`
+`1442d8f32ee6e74834247506cb7428272579ba85cd3680ef5440db2160e926c4`; `rung0_permutation_summary.csv`
+`f17ced40f6d15d3d1f55c75be91d6e60d8f98fc1313e87e00b4f0d239da05670` (superseded, see above); and
+`audit_checksums.json` itself `f10b891e632b861b1aa063cd4a9407d2e7b01ab467fd0adbd42f475eddc2fb91`.
+
+### Verdict
+
+**Re-audit NOT PASSED.**
+
+Blocking:
+
+1. **D17** — the design's sentence about the split (`design.md:58`, `:145`) is false on this run and
+   unrecorded. A documentary fix — state the measured shape (7,441 of 7,641 one against one; 150 two against
+   one; 50 seven against seven) or record the sentence as the superseded pool's — and the panel title at
+   `figures.py:371` with it. The numbers themselves are not in question.
+2. **The permutation stage and the final combine are pending** (both gene sets at 100 permutations, job
+   32378577; combine 32378578 per `verification.md`). D74's artifact, S11's permutation half, the
+   responder permutation's three battery checks and the checksum record that will be committed all wait on
+   them. A re-audit cannot pass over checksums it knows will be rewritten.
+3. **D99–D101 are pending promotion**, which follows the re-audit by design, so they cannot close in this
+   pass; they will need an audit delta over the provenance records when promotion happens.
+
+Every one of the 21 drift items is FIXED, RECORDED or RULED on the current tree; none is STILL DRIFT.
+Of the PENDING RUN claims, D30 (count), D104, D105, D106 and S11 (bootstrap) hold on the artifacts;
+D107 holds under the pooled aggregate and not under the per-triple one; D17 does not hold.
+
+Open decisions, and whether they block:
+
+- **The pooled promotion's withdrawal or re-promotion** — does not block this re-audit, because the
+  re-audit checks this run's documents against this run's artifacts and that record belongs to a different
+  run; it does block promotion, since the battery's two promotion checks fail on it and `check_promotion`
+  cannot pass with it in place.
+- **The estimand declaration** — does not block this re-audit, because the design (`design.md:36-45`) and
+  `decisions.md` (2026-09-09) declare that the choice is made after the dose figure is read and every
+  candidate is in the committed `rung0_dose_strata.csv`, so the documents describe the tree as it is; it
+  does block promotion, since the provenance record's `weighting` argument cannot be written until it is
+  made.
+
+When items 1 and 2 are closed, the re-check is the cap's: D17's sentence, the permutation outputs against
+D74 / S11 / D97, and a fresh recompute of `audit_checksums.json`. Nothing else in this section needs
+rereading.
