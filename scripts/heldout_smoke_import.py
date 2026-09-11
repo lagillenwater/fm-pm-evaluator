@@ -31,6 +31,7 @@ HELDOUT_MODULES = (
     "fmharness.heldout.chemistry",
     "fmharness.heldout.descriptions",
     "fmharness.heldout.grid",
+    "fmharness.heldout.models",
     "fmharness.heldout.records",
 )
 
