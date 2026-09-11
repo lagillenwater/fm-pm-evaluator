@@ -5,8 +5,10 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=61G                    # 16 cores x 3,840 MB; assembles 8 cached gene-slice
-                                     # parquets into the dense answer arrays, no table scan
+#SBATCH --mem=60G                    # 16 cores x 3,840 MB = 61,440 MB = 60G exactly (Slurm's
+                                     # G is GiB; 61G would be 62,464 MB, 1,024 MB over budget);
+                                     # assembles 8 cached gene-slice parquets into the dense
+                                     # answer arrays, no table scan
 #SBATCH --time=02:00:00
 #SBATCH --output=logs/%x-%j.out
 #SBATCH --error=logs/%x-%j.out

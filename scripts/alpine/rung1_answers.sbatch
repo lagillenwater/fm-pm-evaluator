@@ -5,10 +5,11 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=61G                    # 16 cores x 3,840 MB; rung 0's own slice array (a wider
-                                     # scan of the same table) needed 84G at 8 cores, so this
-                                     # slice's DuckDB engine limit (20GB) plus its ~35-40G
-                                     # overhead fits inside 61G with headroom
+#SBATCH --mem=60G                    # 16 cores x 3,840 MB = 61,440 MB = 60G exactly (Slurm's
+                                     # G is GiB; 61G would be 62,464 MB, 1,024 MB over budget);
+                                     # rung 0's own slice array (a wider scan of the same table)
+                                     # needed 84G at 8 cores, so this slice's DuckDB engine
+                                     # limit (20GB) plus its ~35-40G overhead fits inside 60G
 #SBATCH --time=04:00:00              # rung 0 saw scratch reads run 3x slower than usual; a
                                      # gene-hash slice of 107 drugs x 50 lines is far smaller
                                      # than rung 0's full scan, but the slack carries over
