@@ -134,6 +134,9 @@ names or exclusions); `attach_drug_metadata(grid, drug_metadata) -> Grid` (match
 unmatched); `sciplex_exposed_pairs(grid, drug_metadata, line="ACH-000681", cids=SCIPLEX_CIDS)`;
 `ceiling_table(per_pair, grid, dose_strata) -> DataFrame`; `restriction_record(grid, sources) -> dict`.
 
+- [ ] Add `tests/fixtures/tahoe_drug_metadata.csv`: the drug table's `drug, pubchem_cid, canonical_smiles`
+  columns for all 379 drugs at Hugging Face revision `2dc57900b7981cfcf5e211527169a0b006546a95`, so tests run
+  offline. It is an input fixture, not a run output.
 - [ ] Tests on the real promoted tables (committed on this branch): 107 drugs, 50 lines, 5,350 pairs; `NA` is a
   line; `"Selinexor "` maps to `"Selinexor"`; exclusions are exactly the two A549 pairs; ceiling rows equal
   0.5815 / 0.7353 / 0.8575 (4,593 pairs) and 0.0812 / 0.1503 / 0.3876 (5,350), with the promoted 5 uM row beside.
@@ -159,6 +162,10 @@ groups by (line, drug, gene) over rows with a plate at the dose; `mean_lfc = avg
   not scoreable for `responding` but is for `all`.
 - [ ] CLI: `--part k --n-parts 8` writes `answers_{k}.parquet` with its per-task spill directory; `--combine`
   writes `answers.npz` and `rung1_answer_counts.csv`, refusing if any slice is missing.
+- [ ] `--crosswalk` writes `rung1_line_crosswalk.csv` (`line, cellosaurus, cell_name`): the distinct
+  `Cell_ID_DepMap, Cell_ID_Cellosaur, Cell_Name_Vevo` of the grid lines, read from the key columns alone. It is
+  how Task 4 finds each line's cells, and it covers the line whose DepMap key is the literal `NA`. Test: one row
+  per grid line on the fixture pool; a line with two Cellosaurus ids raises.
 - [ ] Gates; commit.
 
 ### Task 4 — DMSO cells: selection, halves, pseudobulk
@@ -174,7 +181,7 @@ groups) -> (labels, ndarray)`.
   plates (a plate with fewer cells than its quota gives all it has); halves are about equal and independent of
   selection; pseudobulk equals a hand-computed CPM on a 3-cell fixture.
 - [ ] CLI block mode: `--block t --n-blocks 64` reads shards `t`-th of 64 (sorted `data/*.parquet`), keeps
-  `drug == "DMSO_TF"` cells of the 50 grid lines (Cellosaurus ids from the screen's crosswalk) whose key is in
+  `drug == "DMSO_TF"` cells of the 50 grid lines (Cellosaurus ids from `rung1_line_crosswalk.csv`) whose key is in
   the superset, decodes only those row groups, and writes `dmso_{t}.parquet` (metadata) and `dmso_{t}.npz`
   (counts over the Stack panel); it also writes the count of all DMSO cells per (line, plate) seen.
   `--combine` selects, writes one `cells/line_{i}.h5ad` per line (obs `cellosaurus, line, plate, key, half`,
@@ -232,12 +239,8 @@ delta0, tested, held, ks=(3,5,10,20)) -> Fit`. `delta0` is `delta` with untested
 
 - [ ] Tests: ridge prediction equals `sklearn.linear_model.Ridge(fit_intercept=False)` on centred data in primal
   form; closed-form loss equals brute-force refits; invariant 1; nearest lines with k = all training lines equals
-  the drug average.
-- [ ] **fit control (known answer):** a synthetic grid of the screen's size (50 × 107, 300 genes) with
-  line-specific responses linear in a description, planted at twice that grid's MDE → the matching description's
-  gain over the drug average is within tolerance of the planted gain, its random stand-in's is not; with nothing
-  planted every gain is within its MDE and λ sits at the top of its range (`test_fit_recovers_planted_line_response`,
-  `test_fit_null_shrinks_to_drug_average`).
+  the drug average; on a small grid with a strong planted line-linear response, ridge beats the drug average in
+  squared error (the full known-answer control, placed relative to the MDE, is in Task 9).
 - [ ] Gates; commit.
 
 ### Task 8 — Models when a drug is hidden
@@ -251,8 +254,7 @@ matrix, which shares the line eigenvectors.
 
 - [ ] Tests: prediction equals a dense solve on a 6 × 8 × 5 grid; block leave-one-drug-out loss equals refits;
   invariant 1 for drugs; with `K_line = 0` and `T` = identity the prediction equals each line's training mean.
-- [ ] **fit control, drugs:** planted effects shared by chemically similar drugs and modulated by the line
-  description are recovered above chemistry only; nothing planted → no gain beyond MDE.
+  (The known-answer fit control for drugs is in Task 9.)
 - [ ] Gates; commit.
 
 ### Task 9 — Scoring and comparisons
@@ -272,6 +274,12 @@ other synthetic builders in `controls.py`.
 - [ ] **null control:** over repeated synthetic grids, a contrast planted at its MDE is detected at 0.80 within
   Monte Carlo tolerance and a zero contrast at ≤ 0.05 (`test_null_detection_at_mde`, `test_null_false_positive_rate`);
   Holm on a hand example; redraws seeded.
+- [ ] **fit control (known answer), both schemes:** a synthetic grid of the screen's size (50 × 107, 300 genes)
+  with line-specific responses linear in a description (LOLO), or shared by chemically similar drugs and modulated
+  by the line description (LODO), planted at twice that grid's MDE → the matching description's gain over the
+  reference is within tolerance of the planted gain, its random stand-in's is not; with nothing planted every gain
+  is within its MDE and λ sits at the top of its range (`test_fit_recovers_planted_line_response`,
+  `test_fit_recovers_planted_drug_response`, `test_fit_null_shrinks_to_reference`).
 - [ ] **split control:** a signature planted only in one unit's own answers is recovered by a leaky fit that keeps
   the held-out unit, and scores zero within MDE under the shipped splits, both schemes (`test_split_leaky_recovers_signature`,
   `test_split_shipped_does_not`).
@@ -293,6 +301,10 @@ bullet, each taking the table it draws; `leakage_profiles(grid, drug_metadata) -
 - [ ] Gates; commit.
 
 ### Task 11 — The Alpine job chain, and the run
+
+**Order.** The data stages (grid, answers, DMSO cells, embeddings, descriptions) depend only on Tasks 1–6, so their
+job scripts are written and submitted right after Task 6, and the data is ready by the time Task 10 lands. The fit,
+redraw and combine jobs follow Task 10. Both halves live in this task's files.
 
 **Files** `scripts/alpine/rung1_env.sh`, `rung1_grid.sbatch`, `rung1_answers.sbatch` (array 0-7), `rung1_answers_combine.sbatch`,
 `rung1_dmso_cells.sbatch` (array 0-63%4), `rung1_dmso_combine.sbatch`, `rung1_embed.sbatch` (GPU array 0-2),

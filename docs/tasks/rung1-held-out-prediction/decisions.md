@@ -116,3 +116,20 @@ document they amend. `design.md` carries the current position.
   you reach the summary." Applied in the same change: the proposed rung 1 text in `docs/SPEC.md`, its
   row and status in `README.md`, and its row in `docs/STATE.md`. Lucas's own edit to §1 (dropping the
   sentence "The lab method, cells and dose stay as in rung 0" and "fixed before any run") stands.
+
+## plan.md
+
+- **2026-09-11** — **Pre-flight scan of the plan, four rulings applied before Task 1.**
+  - **Fit controls moved to Task 9.** Tasks 7 and 8's known-answer fit controls place their plant relative to
+    an MDE, and the MDE machinery arrives in Task 9. Tasks 7–8 keep their exactness tests.
+  - **Line crosswalk added to Task 3.** Task 4 needed each line's Cellosaurus id and no task produced it. The
+    scan writes `rung1_line_crosswalk.csv` from the screen's own key columns, which also covers the line
+    whose DepMap key is the literal `NA`.
+  - **Drug-table fixture added to Task 2** (`tests/fixtures/tahoe_drug_metadata.csv`), so the grid's name
+    crosswalk and exclusion tests run offline.
+  - **Data jobs submitted after Task 6.** Task 11's data stages depend only on Tasks 1–6, so they are submitted
+    as soon as those land, while the models are built.
+- **2026-09-11** — **The answers are scanned, not read from rung 0's cache.** Rung 0's cache keeps only genes
+  with a fold change in both plate halves (`frame_from_slice`). The design defines the answer over every gene
+  measured on at least one plate. Reading the cache would have narrowed an approved definition; one filtered
+  scan keeps it, at the cost of a few hours of cluster time.
