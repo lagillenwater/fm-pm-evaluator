@@ -261,19 +261,17 @@ def block_path(cache: Path, block: int) -> Path:
     return cache / f"redraws_{block}.parquet"
 
 
-def write_block(cache: Path, block: int, draws: pd.DataFrame) -> Path:
-    """Write one block's redraws and its completion record, which pins the block's seed."""
+def write_block(cache: Path, block: int, draws: pd.DataFrame, block_seed: int) -> Path:
+    """Write one block's redraws and its completion record.
+
+    ``block_seed`` is the seed the draws actually came from, passed in rather than recomputed
+    from this module's base seed: a block drawn from another base would otherwise be recorded
+    with provenance it does not have.
+    """
     cache.mkdir(parents=True, exist_ok=True)
     path = block_path(cache, block)
     draws.to_parquet(path, index=False)
-    write_record(
-        path,
-        {
-            "block": block,
-            "rows": len(draws),
-            "block_seed": redraw_block_seed(REDRAW_BASE_SEED, block),
-        },
-    )
+    write_record(path, {"block": block, "rows": len(draws), "block_seed": block_seed})
     return path
 
 
@@ -298,9 +296,10 @@ def main() -> None:
 
     grid = load_grid(args.grid)
     pair_scores = load_pair_scores(args.cache, grid)
-    draws = run_redraw_block(pair_scores, block, grid=grid)
-    write_block(args.cache, block, draws)
-    print(f"wrote {path} ({len(draws)} rows, seed {redraw_block_seed(REDRAW_BASE_SEED, block)})")
+    block_seed = redraw_block_seed(REDRAW_BASE_SEED, block)
+    draws = run_redraw_block(pair_scores, block, seed=REDRAW_BASE_SEED, grid=grid)
+    write_block(args.cache, block, draws, block_seed)
+    print(f"wrote {path} ({len(draws)} rows, seed {block_seed})")
 
 
 if __name__ == "__main__":

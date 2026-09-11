@@ -36,6 +36,7 @@ and determinism checks need none: they compare bytes.
 from __future__ import annotations
 
 import importlib.util
+import itertools
 import json
 import shutil
 import sys
@@ -97,6 +98,23 @@ STRENGTH, NOISE, GRID_SEED, FIXTURE_SEED = 0.8, 0.5, 11, 17
 #: A per-pair score recomputed here with ``np.corrcoef`` may differ from the shipped
 #: ``masked_rowwise_pearson`` only by floating-point association.
 R_TOLERANCE = 1e-12
+
+#: A description and its random stand-in are different fits, so their per-pair scores must differ
+#: by more than this somewhere on the fixture. (The reviewer measured 0.0151 for expression and
+#: 0.0062 for stack_base, against exactly 0.0 for the two whose stand-in was misdispatched.)
+MIN_STAND_IN_DIFFERENCE = 1e-6
+
+#: How many distinct per-pair score vectors the 14 leave-one-line-out models give on this
+#: fixture, fixed before the test runs. It is 13, not 14, for a reason particular to a 6-line
+#: grid: nearest lines has 5 training lines to rank, and its tuning picks k = 5 in every round,
+#: so "the mean over the k most similar training lines" is the mean over all of them -- the drug
+#: average exactly, a documented property of ``nearest_lines_lolo``. At the design's 50-line grid
+#: there are 49 training lines and no candidate k (3, 5, 10, 20) can span them.
+EXPECTED_DISTINCT_LOLO_MODELS = 13
+
+#: The one pair of leave-one-line-out models allowed to coincide on this fixture, for that
+#: reason. Any other pair coinciding is two models collapsed onto one fit.
+COINCIDING_LOLO_MODELS = ("drug_average", "nearest_lines")
 
 
 # ==============================================================================================
@@ -223,13 +241,19 @@ def _in_one_process(cache: Path, grid_path: Path) -> None:
     """The same rounds and blocks in a single process, loading the inputs once."""
     grid = load_grid(grid_path)
     inputs = hf.load_inputs(grid, cache)
+    component_ks = hf.realized_component_ks(inputs)
     for scheme, n_rounds in (("lolo", N_LINES), ("lodo", N_DRUGS)):
         for index in range(n_rounds):
             scores, settings = hf.run_round(scheme, index, inputs)
-            hf.write_round(cache, scheme, index, scores, settings)
+            hf.write_round(cache, scheme, index, scores, settings, component_ks)
     pair_scores = hr.load_pair_scores(cache, grid)
     for block in range(N_BLOCKS_TESTED):
-        hr.write_block(cache, block, hr.run_redraw_block(pair_scores, block, grid=grid))
+        hr.write_block(
+            cache,
+            block,
+            hr.run_redraw_block(pair_scores, block, grid=grid),
+            redraw_block_seed(hr.REDRAW_BASE_SEED, block),
+        )
 
 
 def _output_names() -> list[str]:
@@ -468,7 +492,16 @@ def test_settings_hold_one_row_per_model_and_round(run_dirs: dict[str, Path]) ->
     assert np.isfinite(float(ridge["loss_min"]))
     assert isinstance(bool(ridge["lambda_at_edge"]), bool)
     assert np.isfinite(float(table.set_index("model").loc["nmf", "k"]))
+    # Ruling 35: a stand-in of a tuned description is tuned over the same counts, so it reports a
+    # chosen k of its own -- drawn from its own stand-in, not from the description's components.
+    assert np.isfinite(float(table.set_index("model").loc["random_nmf", "k"]))
     assert not np.isfinite(float(table.set_index("model").loc["drug_average", "lambda"]))
+
+    # The chosen k means nothing without the set it was chosen from, so the round records it.
+    record = json.loads((staged / "settings_lolo_000.csv.done.json").read_text())
+    assert record["component_ks"] == {
+        model: list(NMF_KS) for model in ("nmf", "pca", "random_nmf", "random_pca")
+    }
 
 
 @pytest.mark.step_score
@@ -560,3 +593,173 @@ def test_stand_ins_come_from_the_declared_seeds(run_dirs: dict[str, Path]) -> No
             hf.stand_in(name, N_LINES, STACK_WIDTH),
             random_stand_in(N_LINES, STACK_WIDTH, RANDOM_SEEDS[name]),
         )
+
+
+@pytest.mark.step_fit
+def test_a_description_and_its_stand_in_are_different_fits(run_dirs: dict[str, Path]) -> None:
+    """Every description is fitted on what it describes, and its stand-in on random numbers of
+    the same shape -- including PCA and NMF, whose stand-in is tuned over the same candidate
+    component counts (ruling 35) but from its own matrices.
+
+    Fitted on the description's own components a stand-in would score identically on every pair,
+    and its contrast would be an exact zero reported as "the description adds nothing over random
+    noise".
+    """
+    scores = _all_scores(run_dirs["staged"])
+    for scheme in ("lolo", "lodo"):
+        wide = _wide(scores, scheme, "responding")
+        for spec in MODELS.values():
+            if spec.kind != "ridge" or scheme not in spec.schemes:
+                continue
+            twin = f"random_{spec.id}"
+            assert twin in wide.columns, f"{scheme}: {twin} was not scored"
+            difference = float((wide[spec.id] - wide[twin]).abs().max())
+            assert difference > MIN_STAND_IN_DIFFERENCE, (
+                f"{scheme}: {spec.id} and {twin} score identically on every pair (largest "
+                f"difference {difference}), so the stand-in was not fitted on its own matrices"
+            )
+
+
+@pytest.mark.step_null
+def test_stand_in_contrasts_are_not_identically_zero(run_dirs: dict[str, Path]) -> None:
+    """The consequence, in the table that gets reported: a description-versus-stand-in contrast
+    has a spread and a non-zero estimate, not the exact zero a misdispatched stand-in gives."""
+    block = pd.read_parquet(run_dirs["staged"] / "redraws_0.parquet")
+    for scheme in ("lolo", "lodo"):
+        for description in ("pca", "nmf"):
+            chosen = (block["comparison"] == f"{scheme}_{description}_vs_random_{description}") & (
+                block["gene_set"] == "responding"
+            )
+            estimates = block.loc[chosen, "estimate"].to_numpy(dtype=np.float64)
+            assert estimates.size == DRAWS_PER_BLOCK
+            assert np.abs(estimates).max() > MIN_STAND_IN_DIFFERENCE
+            assert float(estimates.std(ddof=1)) > 0.0
+
+
+@pytest.mark.step_fit
+def test_the_lolo_models_give_distinct_predictions(run_dirs: dict[str, Path]) -> None:
+    """No two leave-one-line-out models collapse onto the same fit. A mistyped model id, a kernel
+    reused for two models, or a stand-in dispatched to its description's matrices all show up
+    here as two identical per-pair score vectors."""
+    wide = _wide(_all_scores(run_dirs["staged"]), "lolo", "responding")
+    declared = [spec.id for spec in MODELS.values() if "lolo" in spec.schemes]
+    assert sorted(wide.columns) == sorted(declared)
+    vectors = {tuple(wide[model].to_numpy(dtype=np.float64).tolist()) for model in declared}
+    assert len(vectors) == EXPECTED_DISTINCT_LOLO_MODELS, (
+        f"{len(declared)} leave-one-line-out models gave {len(vectors)} distinct per-pair score "
+        f"vectors, not {EXPECTED_DISTINCT_LOLO_MODELS}: models collapsed onto one fit"
+    )
+
+    # Which pair coincides is pinned too, so the one coincidence this fixture's size forces
+    # cannot stand in for a different pair collapsing.
+    coinciding = {
+        (a, b)
+        for a, b in itertools.combinations(declared, 2)
+        if np.array_equal(wide[a].to_numpy(dtype=np.float64), wide[b].to_numpy(dtype=np.float64))
+    }
+    assert coinciding == {COINCIDING_LOLO_MODELS}, (
+        f"the models that score identically are {sorted(coinciding)}, not "
+        f"{[COINCIDING_LOLO_MODELS]}"
+    )
+
+
+def _write_full_size_cache(cache: Path, nmf_ks: tuple[int, ...]) -> Path:
+    """A cache at the design's 50 x 107 grid holding only what ``load_inputs`` reads, with
+    ``nmf_{k}`` arrays for ``nmf_ks`` alone -- enough to exercise the full-size guard on the
+    candidate component counts. 60 genes: past the 50 a pair needs, small enough to stay fast."""
+    n_lines, n_drugs, n_genes = hf.FULL_GRID_LINES, hf.FULL_GRID_DRUGS, 60
+    lines = tuple(f"L{i:03d}" for i in range(n_lines))
+    drugs = tuple(f"D{j:03d}" for j in range(n_drugs))
+    cache.mkdir(parents=True, exist_ok=True)
+    grid_path = cache / "rung1_grid.json"
+    grid_path.write_text(
+        json.dumps(
+            {
+                "dose": 5.0,
+                "lines": list(lines),
+                "drugs": list(drugs),
+                "metadata_name": {drug: drug for drug in drugs},
+                "excluded_pairs": [],
+            }
+        )
+        + "\n"
+    )
+
+    rng = np.random.default_rng(FIXTURE_SEED)
+    delta = rng.standard_normal((n_lines, n_drugs, n_genes)).astype(np.float32)
+    np.savez(
+        cache / "answers.npz",
+        lines=np.asarray(lines),
+        drugs=np.asarray(drugs),
+        genes=np.asarray([f"G{g:03d}" for g in range(n_genes)]),
+        delta=delta,
+        responding=np.isfinite(delta),
+    )
+
+    widest = max(hf.COMPONENT_KS)
+    descriptions: dict[str, np.ndarray] = {
+        "lines": np.asarray(lines),
+        "expression": standardize(rng.standard_normal((n_lines, EXPRESSION_WIDTH))),
+        "pca": standardize(rng.standard_normal((n_lines, widest))),
+        **{f"nmf_{k}": standardize(rng.random((n_lines, k))) for k in nmf_ks},
+        "random_expression": random_stand_in(n_lines, EXPRESSION_WIDTH, RANDOM_SEEDS["expression"]),
+        "random_pca": random_stand_in(n_lines, widest, RANDOM_SEEDS["pca"]),
+        "random_nmf": random_stand_in(n_lines, max(nmf_ks), RANDOM_SEEDS["nmf"]),
+    }
+    np.savez(cache / "descriptions.npz", **cast(dict[str, Any], descriptions))
+
+    fingerprints = rng.random((n_drugs, N_BITS)) < 0.3
+    fingerprints[:, 0] = True
+    np.savez(
+        cache / "tanimoto.npz",
+        drugs=np.asarray(drugs),
+        similarity=tanimoto(fingerprints),
+        fingerprints=fingerprints,
+    )
+
+    columns = [f"dim_{i}" for i in range(STACK_WIDTH)]
+    for version in ("base", "cytokine", "drug"):
+        pd.DataFrame(
+            rng.standard_normal((n_lines, STACK_WIDTH)),
+            index=pd.Index(lines, name="line"),
+            columns=columns,
+        ).to_parquet(cache / f"embedding_{version}.parquet")
+
+    return grid_path
+
+
+@pytest.mark.step_fit
+def test_the_designs_candidate_counts_are_required_at_full_size(tmp_path: Path) -> None:
+    """On the design's 50 x 107 grid every tuned model must offer the declared candidate
+    component counts, stand-ins included; a cache missing one ``nmf_{k}`` array is refused rather
+    than quietly running a model with fewer candidates than the design declares. The fixture's
+    6-line grid is not full size, so it keeps the leniency it needs."""
+    complete = tmp_path / "complete"
+    inputs = hf.load_inputs(load_grid(_write_full_size_cache(complete, hf.COMPONENT_KS)), complete)
+    assert hf.realized_component_ks(inputs) == {
+        model: list(hf.COMPONENT_KS) for model in ("nmf", "pca", "random_nmf", "random_pca")
+    }
+
+    narrowed = tmp_path / "narrowed"
+    grid_path = _write_full_size_cache(narrowed, tuple(k for k in hf.COMPONENT_KS if k != 15))
+    with pytest.raises(ValueError, match="candidate component counts"):
+        hf.load_inputs(load_grid(grid_path), narrowed)
+
+
+@pytest.mark.step_null
+def test_a_blocks_record_pins_the_seed_its_draws_came_from(
+    run_dirs: dict[str, Path], tmp_path: Path
+) -> None:
+    """A block's completion record holds the seed its draws were actually made with, not one
+    recomputed from the module's base seed: a block drawn from another base would otherwise be
+    recorded with provenance it does not have."""
+    grid = load_grid(run_dirs["grid"])
+    pair_scores = hr.load_pair_scores(run_dirs["staged"], grid)
+    other_base = hr.REDRAW_BASE_SEED + 500
+    block_seed = redraw_block_seed(other_base, 0)
+    draws = hr.run_redraw_block(pair_scores, 0, seed=other_base, grid=grid)
+    hr.write_block(tmp_path, 0, draws, block_seed)
+
+    record = json.loads((tmp_path / "redraws_0.parquet.done.json").read_text())
+    assert block_seed != redraw_block_seed(hr.REDRAW_BASE_SEED, 0)
+    assert record["block_seed"] == block_seed

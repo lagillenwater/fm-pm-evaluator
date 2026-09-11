@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -85,6 +86,12 @@ COMPONENT_KS: tuple[int, ...] = (2, 5, 10, 15, 20)
 #: The three Stack versions, each with its own per-line mean embedding in the cache.
 STACK_VERSIONS: tuple[str, ...] = ("base", "cytokine", "drug")
 
+#: The design's grid (section 2). At this size the candidate component counts the round actually
+#: tunes over must be ``COMPONENT_KS`` exactly -- a cache missing an ``nmf_{k}`` array, or holding
+#: a narrower PCA, would otherwise quietly run a model with fewer candidates than the design
+#: declares. A smaller grid (a test fixture) legitimately has fewer lines than components.
+FULL_GRID_LINES, FULL_GRID_DRUGS = 50, 107
+
 #: ``scores_{scheme}_{i:03d}.parquet``'s columns, in order (the data contract).
 SCORE_FILE_COLUMNS: tuple[str, ...] = ("scheme", "round", "model", *SCORE_COLUMNS)
 
@@ -117,11 +124,12 @@ class RoundInputs:
     in training) and ``tested`` marks the entries the screen measured -- the pair of arrays every
     model in ``fmharness.heldout.models`` takes. ``masks`` is ``answers.scoreable``'s bool
     ``[L, D]`` array per gene set, so every model is scored on the same pairs (invariant 2).
-    ``kernels`` holds the normalized linear kernel of each model's line description, keyed by
-    model id (the random models' kernels are built from their stand-ins); ``components`` holds
-    the candidate component matrices of the two descriptions whose count is tuned;
-    ``similarity`` is the line-by-line correlation nearest lines ranks by; ``tanimoto`` is the
-    drugs' chemical similarity in grid order.
+    ``kernels`` and ``components`` are both keyed by **model id**, never by description: a model
+    with one kernel is in ``kernels``, a model whose component count is tuned is in
+    ``components`` with one matrix per candidate count. A random stand-in therefore has its own
+    entry built from its own stand-in matrix, and cannot be fitted on the description it stands
+    in for. ``similarity`` is the line-by-line correlation nearest lines ranks by; ``tanimoto``
+    is the drugs' chemical similarity in grid order.
     """
 
     grid: Grid
@@ -201,6 +209,20 @@ def _descriptions(
         raise ValueError("descriptions.npz holds no nmf_{k} arrays")
     components = {"pca": pca_ks, "nmf": nmf_ks}
 
+    if (len(grid.lines), len(grid.drugs)) == (FULL_GRID_LINES, FULL_GRID_DRUGS):
+        narrowed = {
+            name: tuple(sorted(family))
+            for name, family in components.items()
+            if tuple(sorted(family)) != COMPONENT_KS
+        }
+        if narrowed:
+            raise ValueError(
+                f"on the design's {FULL_GRID_LINES} x {FULL_GRID_DRUGS} grid every tuned "
+                f"description must offer the candidate component counts {COMPONENT_KS}; got "
+                f"{narrowed} (a cache written with fewer nmf_{{k}} arrays, or a narrower PCA, "
+                "would silently run a model the design does not declare)"
+            )
+
     descriptions: dict[str, np.ndarray] = {
         "expression": stored["expression"],
         "pca": pca_ks[max(pca_ks)],
@@ -235,26 +257,48 @@ def _tanimoto(cache: Path, grid: Grid) -> np.ndarray:
 
 
 def load_inputs(grid: Grid, cache: Path) -> RoundInputs:
-    """Read the cache once: answers, scoreable masks, every model's kernel, the nearest-lines
-    similarity and the drugs' chemical similarity.
+    """Read the cache once: answers, scoreable masks, every model's own matrices, the
+    nearest-lines similarity and the drugs' chemical similarity.
 
     Descriptions hold no drug response (invariant 3), so each kernel is built over all 50 lines
-    and reveals nothing about a hidden answer; the same kernels serve every round.
+    and reveals nothing about a hidden answer; the same matrices serve every round.
+
+    Each model gets its entry under its **own id**. A description whose component count is tuned
+    (PCA, NMF) gets its candidate matrices; **its random stand-in gets the same candidate counts**
+    (ruling 35), as the first k columns of the stand-in the one helper draws -- design section 5
+    puts a stand-in through the same fit as the description, and for these two that fit includes
+    choosing k. The stand-in's columns are exchangeable draws from one distribution, so its first
+    k are a k-wide draw from it; no second seed source is introduced.
     """
     answers = _load_answers(cache, grid)
     masks = scoreable(answers, grid.excluded_pairs, MIN_GENES)
-    descriptions, components = _descriptions(cache, grid)
+    descriptions, candidates = _descriptions(cache, grid)
     n_lines = len(grid.lines)
 
     kernels: dict[str, np.ndarray] = {}
+    components: dict[str, dict[int, np.ndarray]] = {}
     for spec in MODELS.values():
         if spec.description is None or spec.kind == "nearest_lines":
             continue
-        if spec.kind == "random":
-            width = descriptions[spec.description].shape[1]
-            kernels[spec.id] = linear_kernel(stand_in(spec.description, n_lines, width))
-        elif spec.description not in components:
-            kernels[spec.id] = linear_kernel(descriptions[spec.description])
+        described = descriptions[spec.description]
+        family = candidates.get(spec.description)
+        if spec.kind != "random":
+            if family is None:
+                kernels[spec.id] = linear_kernel(described)
+            else:
+                components[spec.id] = family
+            continue
+        matrix = stand_in(spec.description, n_lines, described.shape[1])
+        if family is None:
+            kernels[spec.id] = linear_kernel(matrix)
+            continue
+        widest = max(family)
+        if widest > matrix.shape[1]:
+            raise ValueError(
+                f"the stand-in for {spec.description} is {matrix.shape[1]} columns wide, "
+                f"narrower than its widest candidate component count {widest}"
+            )
+        components[spec.id] = {k: matrix[:, :k] for k in sorted(family)}
 
     return RoundInputs(
         grid=grid,
@@ -269,43 +313,64 @@ def load_inputs(grid: Grid, cache: Path) -> RoundInputs:
     )
 
 
+def realized_component_ks(inputs: RoundInputs) -> dict[str, list[int]]:
+    """The candidate component counts each tuned model actually chose between, by model id.
+
+    Recorded beside the round's settings so task 12's battery can check the run tuned over the
+    design's declared counts, and not over a set a narrowed cache quietly handed it.
+    """
+    return {model: sorted(family) for model, family in sorted(inputs.components.items())}
+
+
 def _reference_fit(prediction: np.ndarray) -> Fit:
     """A model that tunes nothing (the drug average) as a ``Fit``: no penalty, no component
     count, and no tuning loss to report."""
     return Fit(prediction=prediction, lam=None, k=None, loss_min=float("nan"), at_edge=False)
 
 
+def _kernel(spec: ModelSpec, inputs: RoundInputs) -> np.ndarray:
+    """The kernel built for this model id. Raises rather than letting a model with no matrices of
+    its own fall through to another model's."""
+    kernel = inputs.kernels.get(spec.id)
+    if kernel is None:
+        raise KeyError(f"no kernel or candidate components were built for model {spec.id!r}")
+    return kernel
+
+
 def _fit_lolo(spec: ModelSpec, index: int, inputs: RoundInputs) -> Fit:
-    """One model's fit with line ``index`` hidden."""
+    """One model's fit with line ``index`` hidden.
+
+    Both ridge branches look their matrices up by **model id**, so a random stand-in is fitted on
+    its own stand-in -- over the same candidate component counts as the description it stands in
+    for, when that description tunes one (ruling 35) -- and never on the description itself.
+    """
     if spec.kind == "reference":
         n_lines = len(inputs.grid.lines)
         train = np.flatnonzero(np.arange(n_lines) != index)
         return _reference_fit(drug_average(inputs.delta0, train))
     if spec.kind == "nearest_lines":
         return nearest_lines_lolo(inputs.similarity, inputs.delta0, inputs.tested, index)
-    if spec.description in inputs.components:
-        return ridge_lolo_k(
-            inputs.components[spec.description], inputs.delta0, inputs.tested, index
-        )
-    return ridge_lolo(inputs.kernels[spec.id], inputs.delta0, inputs.tested, index)
+    family = inputs.components.get(spec.id)
+    if family is not None:
+        return ridge_lolo_k(family, inputs.delta0, inputs.tested, index)
+    return ridge_lolo(_kernel(spec, inputs), inputs.delta0, inputs.tested, index)
 
 
 def _fit_lodo(spec: ModelSpec, index: int, inputs: RoundInputs) -> Fit:
     """One model's fit with drug ``index`` hidden. Chemistry only is the same ridge regression
-    with an all-zero line kernel: chemically similar drugs share effects, whatever the line."""
+    with an all-zero line kernel: chemically similar drugs share effects, whatever the line.
+
+    As in ``_fit_lolo``, both ridge branches look up by model id, so a stand-in is fitted on its
+    own matrices.
+    """
     n_lines = len(inputs.grid.lines)
     if spec.kind == "reference":
         no_line_term = np.zeros((n_lines, n_lines))
         return ridge_lodo(no_line_term, inputs.tanimoto, inputs.delta0, inputs.tested, index)
-    if spec.description in inputs.components:
-        return ridge_lodo_k(
-            inputs.components[spec.description],
-            inputs.tanimoto,
-            inputs.delta0,
-            inputs.tested,
-            index,
-        )
-    return ridge_lodo(inputs.kernels[spec.id], inputs.tanimoto, inputs.delta0, inputs.tested, index)
+    family = inputs.components.get(spec.id)
+    if family is not None:
+        return ridge_lodo_k(family, inputs.tanimoto, inputs.delta0, inputs.tested, index)
+    return ridge_lodo(_kernel(spec, inputs), inputs.tanimoto, inputs.delta0, inputs.tested, index)
 
 
 def _round_pairs(scheme: Scheme, index: int, inputs: RoundInputs) -> tuple[np.ndarray, np.ndarray]:
@@ -368,16 +433,33 @@ def round_paths(cache: Path, scheme: Scheme, index: int) -> tuple[Path, Path]:
 
 
 def write_round(
-    cache: Path, scheme: Scheme, index: int, scores: pd.DataFrame, settings: pd.DataFrame
+    cache: Path,
+    scheme: Scheme,
+    index: int,
+    scores: pd.DataFrame,
+    settings: pd.DataFrame,
+    component_ks: Mapping[str, Sequence[int]],
 ) -> tuple[Path, Path]:
-    """Write the round's two files and their completion records."""
+    """Write the round's two files and their completion records.
+
+    ``component_ks`` (from ``realized_component_ks``) is recorded beside the settings, so the
+    candidate component counts the round actually tuned over are pinned with its bytes -- the
+    chosen k in the settings table is only interpretable against the set it was chosen from.
+    """
     cache.mkdir(parents=True, exist_ok=True)
     scores_path, settings_path = round_paths(cache, scheme, index)
     record = {"scheme": scheme, "round": index}
     scores.to_parquet(scores_path, index=False)
     write_record(scores_path, {**record, "rows": len(scores)})
     settings.to_csv(settings_path, index=False)
-    write_record(settings_path, {**record, "models": len(settings)})
+    write_record(
+        settings_path,
+        {
+            **record,
+            "models": len(settings),
+            "component_ks": {model: list(ks) for model, ks in component_ks.items()},
+        },
+    )
     return scores_path, settings_path
 
 
@@ -406,7 +488,7 @@ def main() -> None:
 
     inputs = load_inputs(grid, args.cache)
     scores, settings = run_round(scheme, index, inputs)
-    write_round(args.cache, scheme, index, scores, settings)
+    write_round(args.cache, scheme, index, scores, settings, realized_component_ks(inputs))
     print(f"wrote {scores_path} ({len(scores)} rows)")
     print(f"wrote {settings_path} ({len(settings)} models)")
 
