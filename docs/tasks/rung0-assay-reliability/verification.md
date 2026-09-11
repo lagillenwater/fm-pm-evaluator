@@ -1,0 +1,100 @@
+# Rung 0 — verification record
+
+**As of** 2026-09-11. Per `docs/PROCESS.md` §1 (Verify): the commands run, their output, and
+where everything the run produced lives. The claim-by-claim recomputation is `verify.ipynb`;
+this document records that it was done, on what, and what came back.
+
+## The run
+
+The dose-fixed measurement, on code at `3121b65` and later (every stage's parameter sidecar
+records its own `git_sha`), over the tranche `tahoe100m-pseudobulk-de.v1` on Alpine scratch,
+as the chain the design declares — assign, slices, combine, permutation — with the slices
+packed onto high-memory nodes on the day the general queue was deep.
+
+| stage | job | partition | wall | peak RSS | produced |
+|---|---|---|---|---|---|
+| assign | 32366450 | acpu, 96G, engine 60G | 45 min 18 s | 83 GB | the split assignment (56,827 triples, 7,641 replicated) and the pool description |
+| slices 0–10 | 32369084_0 | amem, whole node, 11 slices at once | 2 h 27 min | 838 GB | 11 cached slices |
+| slices 11–21 | 32369084_1 | amem | 2 h 27 min | 836 GB | 11 cached slices |
+| slices 22–31 | 32369084_2 | amem | 2 h 48 min | 758 GB | 10 cached slices |
+| combine | 32369085 | amem, 256G | 8 min 23 s | 39 GB | every table and figure (first pass) |
+| permutation, all genes, 500 | 32369086 | amem, 256G | 3 h 18 min to the all-gene summary | 39 GB | superseded: cancelled 1 h 19 min into the responder set, and the check was cut to 100 permutations (`decisions.md`, 2026-09-10) |
+| combine (dose formatting fix, `3121b65`) | 32378445 | amem, 256G | 5 min 44 s | 40 GB | every table and figure, the committed set |
+| permutation, both gene sets, 100 | 32378577 | amem, 256G, 3 h | 1 h 18 min (44 min all genes, 34 min responders) | 39 GB | `rung0_permutation_*.csv`, both `11_permutation_vs_bootstrap*.png` |
+| combine, final | 32378578 | amem, after 32378577 | 6 min 53 s | 40 GB | the committed tables; `audit_checksums.json` records 46 artifacts, the permutation outputs among them |
+
+The thirty-two slices read 4,089,820,780 rows once each and returned 174,343,417 scoreable
+gene-conditions and 479,167,110 decomposable ones. Logs are in
+`results/rung0-assay-reliability/logs/` (assign, the three packs, every slice, both combines).
+
+Attempts that did not produce the result, kept for the record: 32341467 (assign, killed at 64
+GB with the engine at 48 GB); 32341611 (sixteen 120 GB slices, billed as 32-core jobs, ran one
+at a time and were cancelled); 32345592_0 (a thirty-second at 72 GB, killed at 75 GB); 32347952
+(thirty-two slices sharing one spill directory — truncated temp files, segfaults, one engine OOM;
+nothing from it reused); 32365763 (assign at a 40 GB engine, did not finish in 40 min);
+32366451 and 32368430 (queued arrays superseded by the packed route). Each is explained in the
+job scripts' comments and in `decisions.md`.
+
+## Commands run locally, and what they returned
+
+```
+uv run pytest                          152 passed, 1 skipped (the committed-run test skips
+                                       until the run is committed)
+uv run ruff check . && ruff format --check . && pyright     clean
+uv run python scripts/verify_rung0.py  75 / 77 checks pass, 0 skipped, 77 total
+```
+
+The two failures
+are the same open item, not a defect of this run: `results/rung0-assay-reliability/` still holds
+the dose-pooled promotion of 2026-09-02, whose table is not this run's and whose provenance
+names `92407c1`, the promotion-time commit, where its own sidecar says `5192606`. It stays
+until the decision to withdraw or re-promote it is made.
+
+Both reviewer notebooks executed end to end against these artifacts (`jupyter nbconvert
+--execute`): `verify.ipynb` printed 73 PASS and the same 2 FAIL; `summary.ipynb` ran without
+error and reports hypotheses 1, 2 and 3 held; hypothesis 4 holds in the aggregate the design
+states it in (variance across plates pooled over the responders' gene-conditions, 3.67, against
+1.50 over all) and not triple by triple (the typical triple's responders are less variable than
+its non-responders), and the notebook prints both readings.
+
+## What the run says
+
+| | all genes | responders |
+|---|---|---|
+| triples scored | 7,641 | 6,654 |
+| split-half r, mean over triples | 0.065 | 0.430 |
+| Spearman-Brown | 0.122 | 0.601 |
+| equal-halves subset | 7,491 triples, 0.066 | 6,518, 0.437 |
+| different-drug floor | 0.017 | 0.106 |
+| same-drug, same-dose floor | 0.042 | 0.257 |
+| p vs each floor (bootstrap) | 0.0005, 0.0005 | 0.0005, 0.0005 |
+| permutation, 100: exact p | 0.0099 (the floor 100 permutations can give) | 0.0099 |
+| permutation: observed against null, in null sds | 145 | 201 |
+| design effect, different-drug stratum | 0.70 | 0.51 |
+| by dose, 0.05 / 0.5 / 5.0 uM | 0.029 / 0.024 / 0.081 | 0.136 / 0.035 / 0.577 |
+
+Noise: pooled over all 174,564,006 gene-conditions the variance across plates (1.497) is
+below the published squared standard error (2.858), so the plate component is zero and the
+published errors are conservative for null genes. Pooled within the responders the share is
+0.737, a number the design's selection rule inflates (responders are chosen on plate 0's
+significance, which widens the plate-0-against-plate-1 difference by construction); it is
+reported, not cited. Both tercile rankings rise (0.050 → 0.070 → 0.075; 0.061 → 0.061 →
+0.073).
+
+## Where everything is
+
+- Tables: `docs/tasks/rung0-assay-reliability/rung0_*.csv{,.gz}` — the per-triple table
+  (`rung0_per_pair_r.csv`) is the primary artifact; `rung0_dose_strata.csv` carries every
+  candidate ceiling; `rung0_split_assignment.csv` is the split itself.
+- Figures: `docs/tasks/rung0-assay-reliability/figures/01_build.png` … `10_dose.png`,
+  `11_permutation_vs_bootstrap.png`, with `04_score.values.csv.gz` beside the score figure.
+- Parameter sidecars: `rung0_reliability.params.json`, `rung0_noise_decomposition.params.json`,
+  `rung0_permutation_summary.params.json` — each with the commit and job that produced it.
+- Checksums: `audit_checksums.json`, one sha256 per artifact, recomputed by the battery.
+- Logs: `results/rung0-assay-reliability/logs/`.
+
+## Open
+
+The responder permutation and the final combine; the fresh-reader re-audit (`audit.md`,
+"Re-audit"); the estimand declaration (`decisions.md`); the pooled promotion's withdrawal or
+re-promotion; then promotion of this run with run-time provenance.

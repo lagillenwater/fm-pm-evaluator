@@ -154,3 +154,16 @@ per `docs/PROCESS.md` §1 and SPEC project rule 2.
   the within-dose replication) — jobs 31996238, 31996294 and 31996456 in the 2026-09-01 reversal
   entry. They are one-off measurements over the key columns, kept for the record of how the
   confounding was found, and no rung's result is computed by them.
+- **2026-09-11** — **The design effect is reported for the different-drug stratum, not the
+  pooled any-pair one.** `permutation_null` divides the variance of the permutation means by the
+  variance of a mismatched-pair pool drawn with the same count as the permutations, so at 100
+  permutations both the numerator and the denominator rest on 100 values. The any-pair pool
+  mixes same-drug pairs with different-drug pairs, whose null correlations differ by a factor of
+  two to three (all genes 0.044 against 0.019; responders 0.281 against 0.116), so its variance
+  swings with how many same-drug pairs a draw catches: for all genes the any-pair design effect
+  read 0.783 at 500 permutations (job 32369086) and 1.257 at 100 (job 32378577), while the
+  different-drug one, a homogeneous stratum and the one the p-value is read against, read 0.755
+  and 0.704. The different-drug design effect is therefore the one cited — 0.70 for all genes,
+  0.51 for responders — and the any-pair value stays in the table, unread. No verdict depends on
+  it: the observed means sit 145 and 201 null standard deviations above the permutation null,
+  and exact p is 0.0099, the floor 100 permutations can give, in every stratum of both gene sets.

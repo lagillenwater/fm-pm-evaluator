@@ -4,11 +4,11 @@
 The spec says what each rung must establish and what a passing result means; this document says where each one stands.
 It carries no history: a rung's result belongs here, how it came to be belongs in git and in that rung's spec.
 
-**As of** 2026-09-02.
+**As of** 2026-09-10.
 
 A number not carried here with its provenance record is not evidence.
 Promotion means a result in `results/<task-slug>/` with a `<result>.provenance.json` beside it recording the commit, job and inputs that produced it — project rule 1.
-Rung 0 has promoted one result, and it is provisional: a dose-pooled reliability that measures a dose-to-dose correlation rather than a test-retest reliability, promoted so the run is traceable rather than because it settles the rung. Its provenance record says so in its own `dose_handling` field. No rung is closed.
+Rung 0's dose-fixed run is complete and verified (72 of 74 battery checks; the two failures are the superseded dose-pooled promotion of 2026-09-02, whose withdrawal is pending) and awaits its re-audit and the estimand declaration before promotion. The one promoted result is that superseded pooled number. No rung is closed.
 
 ---
 
@@ -16,7 +16,7 @@ Rung 0 has promoted one result, and it is provisional: a dose-pooled reliability
 
 | Rung | What the spec requires | Status |
 |---|---|---|
-| 0 — assay reliability | Two reproducibility ceilings clearing their nulls at the assay's full extent — all genes, and each condition's responders — with replicate noise decomposed into plate and cell-sampling parts | **Provisional result promoted, rung not closed.** Dose-pooled run on branch `rung0-assay-reliability` ([design](tasks/rung0-assay-reliability/design.md) · [summary](tasks/rung0-assay-reliability/summary.ipynb) · [result](../results/rung0-assay-reliability/rung0_reliability.csv)): all-gene split-half **0.118** (Spearman-Brown **0.210**) over 18,329 conditions, responders **0.559** (**0.717**) over 16,644, both clearing their floors at p = 0.0005. **Not usable as a ceiling**: dose is confounded with plate on this screen, so the two halves carry different doses for 99.7% of conditions and the number is a dose-to-dose correlation. The dose-fixed correction is in the code and had not run when the cluster went down. The noise decomposition never completed |
+| 0 — assay reliability | Two reproducibility ceilings clearing their nulls at the assay's full extent — all genes, and each condition's responders — with replicate noise decomposed into plate and cell-sampling parts | **Run complete and verified, not yet promoted.** Dose held fixed, plates split alternately, on branch `rung0-assay-reliability` ([design](tasks/rung0-assay-reliability/design.md) · [summary](tasks/rung0-assay-reliability/summary.ipynb) · [verification](tasks/rung0-assay-reliability/verification.md)): over 7,641 replicated (line, drug, dose) triples the all-gene split-half is **0.065** (Spearman-Brown **0.122**) and the responder split-half **0.430** (**0.601**) over 6,654, both clearing their floors at p = 0.0005. The responder ceiling is a 5 uM property: **0.577** there against 0.136 and 0.035 at the two lower doses, which the dose figure shows and the strata table carries; which aggregate a later rung divides by is the open declaration. Noise: the published standard errors exceed the across-plate variance for all genes, so no plate component is detectable there. The superseded dose-pooled promotion (0.118 / 0.559, wrong provenance commit) awaits withdrawal |
 | 1 — held-out line | Prediction beating a floor and recovering a planted signal, as a fraction of rung 0 | Not started |
 | 2 — bulk read by a single-cell model | A synthesised population landing near the same material's real single cells, clearing a mismatched-line null | Not started |
 | 3 — cross-platform | Retention separable from a scrambled-line control | Not started |
