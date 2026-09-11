@@ -93,7 +93,10 @@ so a rerun skips finished work and the audit can pin bytes.
 5. **Ceiling values reproduce the design table** from the promoted per-pair table (`test_ceiling_table_matches_design`).
 6. **Tuning is closed-form and exact.** Ridge leave-one-line-out and leave-one-drug-out losses equal brute-force
    refits (`test_ridge_lolo_closed_form_loo_equals_refits`, `test_ridge_lodo_block_loo_equals_refits`).
-   Tuning holds the round's reference (drug average, or line means) fixed at its training-set value.
+   Each inner fit re-estimates the round's reference (the drug average, or the line means) without the left-out
+   line or drug, and the brute-force refits do the same. A reference held fixed would still contain the left-out
+   unit's own answer and leak it into its tuning prediction (decisions.md, plan.md, 2026-09-11). A null test pins
+   it: on pure-noise answers a full-rank description must not select the smallest penalty.
 7. **The linear kernel is scaled to a mean diagonal of 1**, so the LODO term `1 + k(l, l')` weighs the two parts
    comparably. Tuning losses are mean squared error over tested entries only.
 8. **Staged equals one process.** Rounds + combine on a fixture equal a single in-process run

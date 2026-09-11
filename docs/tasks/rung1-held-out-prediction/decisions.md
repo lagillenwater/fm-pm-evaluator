@@ -133,3 +133,17 @@ document they amend. `design.md` carries the current position.
   with a fold change in both plate halves (`frame_from_slice`). The design defines the answer over every gene
   measured on at least one plate. Reading the cache would have narrowed an approved definition; one filtered
   scan keeps it, at the cost of a few hours of cluster time.
+- **2026-09-11** — **REVERSAL of plan invariant 6: tuning re-estimates the reference without the left-out unit.**
+  - **The problem:** found by Task 7's review. The plan held the drug average fixed while leaving one training line
+    out. That average contains the left-out line, so its departures from it sum with the others' to zero, and the
+    descriptions are centred across lines. Ridge at a small penalty then fits that constant direction and hands the
+    left-out line back its own answer. About half the answer comes back for a wide description, about 1.5% for a
+    20-component one. On pure-noise answers a 400-dimension description chose the smallest penalty (review's
+    numerical check).
+  - **Why it matters:** it biases wide-against-narrow comparisons, which is what rung 1 measures. The held-out
+    line's own prediction never leaked; only the choice of penalty was affected.
+  - **The fix:** exact and closed form. Re-estimate the reference without the left-out unit. For lines, the
+    leave-one-out residual operator gains `diag(E·1)/(T−1)`. For drugs, the block residual in the line eigenbasis
+    gains `diag((1−g_j)/(1−h_j))·Uᵀ R_j/(D−1)`, with `g_j[c] = Σ_a U_d[j,a]·(U_dᵀ1)[a]·w_ca/(w_ca+λ)`.
+  - **Standing:** this is closer to the design's "chosen by leaving out one training line (or drug) at a time" than
+    the plan's simplification was, so it is a plan correction, not a design change.
