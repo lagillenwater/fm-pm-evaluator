@@ -147,3 +147,27 @@ document they amend. `design.md` carries the current position.
     gains `diag((1−g_j)/(1−h_j))·Uᵀ R_j/(D−1)`, with `g_j[c] = Σ_a U_d[j,a]·(U_dᵀ1)[a]·w_ca/(w_ca+λ)`.
   - **Standing:** this is closer to the design's "chosen by leaving out one training line (or drug) at a time" than
     the plan's simplification was, so it is a plan correction, not a design change.
+
+## design.md (execution)
+
+- **2026-09-11** — **Recorded departure, §8 fit control: "planted at twice their MDE" is unattainable as written.**
+  - **What was measured:** Task 9's implementer measured it on a grid of the screen's size (50 × 107 × 300 genes,
+    width 20, 2,000 redraws). At every detectable plant, the gain of an oracle that knows the true change is at
+    least about 10 times its own MDE. The gain's spread across lines grows with the gain. Below that the matching
+    ridge fit recovers nothing.
+  - **The control as run:**
+    - a fixed plant (strength 0.3) at the design's reliability (R = 0.7353);
+    - the oracle's gain asserted ≥ 2 × its MDE, with the ratio reported;
+    - the matching description's gain must be detected (p < 0.05) and must not exceed the oracle's gain by more
+      than 3 standard errors of their difference.
+  - **The random stand-in:**
+    - with a line hidden, its gain must be within its MDE of zero;
+    - with a drug hidden, every line is in training, so a random 20-column basis spans part of line space
+      (measured about 20/49 of a planted line effect). There the control requires the description to beat its
+      stand-in (p < 0.05), and reports the stand-in's gain.
+  - **Nulls:**
+    - "no gain beyond the MDE" is read one-sided (gain ≤ MDE);
+    - the drug-hidden null sets both the line and the chemistry effects to zero before requiring the penalty at
+      the top of its range in most rounds.
+  - **Scope:** the control still plants a known answer and requires the shipped code to recover it. Nothing
+    measured on real data changes.
