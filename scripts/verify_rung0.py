@@ -334,10 +334,12 @@ def check_null_floors(task_dir: Path) -> list[Check]:
         ]
         checks.append(
             Check(
-                f"{label}: both minimum detectable effects are positive and finite",
-                "an MDE at alpha 0.05, power 0.80 exists against each floor",
-                f"vs different-drug {mdes[0]}, vs same-drug {mdes[1]}",
-                all(np.isfinite(m) and m > 0 for m in mdes),
+                f"{label}: both minimum detectable effects are finite and above their floors",
+                "an MDE at alpha 0.05, power 0.80: the smallest true mean detectable against each",
+                f"vs different-drug {mdes[0]} (floor {floor_diff}), "
+                f"vs same-drug {mdes[1]} (floor {floor_same})",
+                bool(np.isfinite(mdes[0]) and mdes[0] > floor_diff)
+                and bool(np.isfinite(mdes[1]) and mdes[1] > floor_same),
             )
         )
     return checks
@@ -412,15 +414,19 @@ def check_significance(task_dir: Path) -> list[Check]:
             )
         for stratum in ("diff_drug", "same_drug"):
             mde = float(row[f"{label}_mde_80_vs_{stratum}"])
+            floor = float(row[f"{label}_null_{stratum}_mean_r"])
             p = float(
                 row[f"{label}_p_vs_null" if stratum == "diff_drug" else f"{label}_p_vs_same_drug"]
             )
-            ok = np.isfinite(mde) and mde > 0 and (mde <= mean_obs or p >= 0.05)
+            # A level of the mean, above the floor it is detected against -- not necessarily
+            # above zero, since a floor can be negative.
+            ok = np.isfinite(mde) and mde > floor and (mde <= mean_obs or p >= 0.05)
             checks.append(
                 Check(
                     f"{label}: MDE vs {stratum} is a detectable effect",
                     f"mde_80_vs_{stratum} {mde}",
-                    f"positive and finite, and below the observed mean {mean_obs:.4f} "
+                    f"finite, above its floor {floor:.4f}, and below the observed mean "
+                    f"{mean_obs:.4f} "
                     f"where the result is called significant (p = {p})",
                     bool(ok),
                 )
@@ -1070,9 +1076,16 @@ def check_dose_nulls(task_dir: Path) -> list[Check]:
                 verdicts.append(
                     f"{dose} {stratum}: {mean_obs} vs {float(s_row[floor_key])}, p {reported}"
                 )
-            for key in ("mde_80_vs_diff_drug", "mde_80_vs_same_drug"):
-                if not (np.isfinite(float(s_row[key])) and float(s_row[key]) > 0):
-                    bad.append(f"{dose}/{key}")
+            # The MDE is a level of the mean, not a distance above the floor: it is the smallest
+            # true mean detectable against that floor, so it sits above the floor and may be
+            # negative where the floor is (responders at 0.5 uM: floor -0.028, MDE -0.011).
+            for key, floor_key in (
+                ("mde_80_vs_diff_drug", "null_diff_drug_mean_r"),
+                ("mde_80_vs_same_drug", "null_same_drug_mean_r"),
+            ):
+                mde, floor = float(s_row[key]), float(s_row[floor_key])
+                if not (np.isfinite(mde) and mde > floor):
+                    bad.append(f"{dose}/{key} {mde} not above its floor {floor}")
         checks.append(
             Check(
                 name,

@@ -21,7 +21,8 @@ packed onto high-memory nodes on the day the general queue was deep.
 | permutation, all genes, 500 | 32369086 | amem, 256G | 3 h 18 min to the all-gene summary | 39 GB | superseded: cancelled 1 h 19 min into the responder set, and the check was cut to 100 permutations (`decisions.md`, 2026-09-10) |
 | combine (dose formatting fix, `3121b65`) | 32378445 | amem, 256G | 5 min 44 s | 40 GB | every table and figure, the committed set |
 | permutation, both gene sets, 100 | 32378577 | amem, 256G, 3 h | 1 h 18 min (44 min all genes, 34 min responders) | 39 GB | `rung0_permutation_*.csv`, both `11_permutation_vs_bootstrap*.png` |
-| combine, final | 32378578 | amem, after 32378577 | 6 min 53 s | 40 GB | the committed tables; `audit_checksums.json` records 46 artifacts, the permutation outputs among them |
+| combine (after 32378577) | 32378578 | amem, 256G | 6 min 53 s | 40 GB | superseded by the combine below |
+| combine, final (per-dose floors, `8392557`) | 32379206 | amem, 256G | 5 min 51 s | 40 GB | the committed tables, with each dose level's own floors, p-values and MDEs and `rung0_null_draws_by_dose.csv`; `audit_checksums.json` records 47 artifacts |
 
 The thirty-two slices read 4,089,820,780 rows once each and returned 174,343,417 scoreable
 gene-conditions and 479,167,110 decomposable ones. Logs are in
@@ -41,7 +42,7 @@ job scripts' comments and in `decisions.md`.
 uv run pytest                          152 passed, 1 skipped (the committed-run test skips
                                        until the run is committed)
 uv run ruff check . && ruff format --check . && pyright     clean
-uv run python scripts/verify_rung0.py  75 / 77 checks pass, 0 skipped, 77 total
+uv run python scripts/verify_rung0.py  77 / 79 checks pass, 0 skipped, 79 total
 ```
 
 The two failures
@@ -71,7 +72,24 @@ its non-responders), and the notebook prints both readings.
 | permutation, 100: exact p | 0.0099 (the floor 100 permutations can give) | 0.0099 |
 | permutation: observed against null, in null sds | 145 | 201 |
 | design effect, different-drug stratum | 0.70 | 0.51 |
-| by dose, 0.05 / 0.5 / 5.0 uM | 0.029 / 0.024 / 0.081 | 0.136 / 0.035 / 0.577 |
+
+The declared ceilings are the dose-level rows (`decisions.md`, 2026-09-11), each read against
+floors drawn from triples at its own dose (`rung0_dose_strata.csv`):
+
+| dose (uM) | gene set | triples | mean r | Spearman-Brown | floor, different drug | floor, same drug and dose | p, p | clears both |
+|---|---|---|---|---|---|---|---|---|
+| 0.05 | all genes | 1,245 | 0.029 | 0.056 | 0.019 | 0.020 | 0.0005, 0.0005 | yes |
+| 0.5 | all genes | 1,000 | 0.024 | 0.047 | 0.002 | 0.010 | 0.0005, 0.0005 | yes |
+| 5.0 | all genes | 5,396 | 0.081 | 0.149 | 0.022 | 0.061 | 0.0005, 0.0005 | yes |
+| 0.05 | responders | 1,129 | 0.136 | 0.239 | 0.065 | 0.068 | 0.0005, 0.0005 | yes |
+| 0.5 | responders | 890 | 0.035 | 0.068 | -0.028 | 0.024 | 0.0005, 0.026 | yes, narrowly |
+| 5.0 | responders | 4,635 | 0.577 | 0.732 | 0.161 | 0.357 | 0.0005, 0.0005 | yes |
+
+Every dose-level ceiling clears both of its own floors. The margins differ by an order of
+magnitude: responders at 5 uM sit 0.22 above their same-dose floor, responders at 0.5 uM 0.011
+above theirs at p 0.026, the one ceiling a later rung would read against with little room. The
+floors themselves move with dose as the correlations do, which is why pooled floors could not
+stand in for them: the 5 uM responder same-dose floor is 0.357, well above the pooled 0.257.
 
 Noise: pooled over all 174,564,006 gene-conditions the variance across plates (1.497) is
 below the published squared standard error (2.858), so the plate component is zero and the
@@ -95,6 +113,6 @@ reported, not cited. Both tercile rankings rise (0.050 → 0.070 → 0.075; 0.06
 
 ## Open
 
-The responder permutation and the final combine; the fresh-reader re-audit (`audit.md`,
-"Re-audit"); the estimand declaration (`decisions.md`); the pooled promotion's withdrawal or
-re-promotion; then promotion of this run with run-time provenance.
+The fresh-reader re-audit's second pass on these final artifacts (`audit.md`, "Re-audit"); the
+withdrawal or re-promotion of the 2026-09-02 dose-pooled promotion; then promotion of this run's
+four tables with run-time provenance.
