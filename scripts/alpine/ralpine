@@ -97,20 +97,59 @@ remote_fixed() {
   ssh -o BatchMode=yes "$HOST" "$@"
 }
 
+# One UTC-timestamped aside directory per run, shared by every move/copy-aside step that run
+# performs -- so switch's untracked move-aside and tracked copy-aside (Ruling 23, 2026-09-11)
+# land in the SAME _moved_aside/<time>/, not two different ones a second apart. Single-quoted:
+# the embedded $(date ...) must NOT run locally, only when the assembled command reaches the
+# remote shell. Every remote command that uses move_aside_cmd/copy_aside_cmd must splice this
+# in exactly once, before either.
+ASIDE_INIT='aside=_moved_aside/$(date -u +%Y%m%dT%H%M%SZ)'
+
 # Shared move-aside fragment for `update` and `switch`. Given a git diff range/args (a single
 # two-dot token like "HEAD..@{u}", or two space-separated refs like "HEAD origin/<branch>"),
 # echoes the remote shell fragment that finds every path the far side ADDS which is (a) present
 # in the working tree and (b) NOT tracked by the current index, and moves each aside into
-# _moved_aside/<UTC time>/ with its path preserved -- never deletes, never touches a file the
-# incoming side does not add. Approved 2026-09-09 for `update`; see its comment below for why
-# this exists. `switch` reuses it unchanged as of 2026-09-11 (see switch's comment).
+# $aside (see ASIDE_INIT, which the caller must have already spliced in) with its path
+# preserved -- never deletes, never touches a file the incoming side does not add. Approved
+# 2026-09-09 for `update`; see its comment below for why this exists. `switch` reuses it
+# unchanged as of 2026-09-11 (see switch's comment). `--no-renames` (Ruling 20, 2026-09-11):
+# without it, a path git detects as a rename is reported as R, not A, and silently skipped.
+#
+# `|| exit 1` on the loop body (2026-09-11, Ruling 5): a `mkdir`/`mv` failure on a non-last
+# path used to be swallowed by the `while` and the run continued into `git merge`/`git switch`
+# regardless. The loop runs in a pipe (`git diff ... | while ...`), so it is a subshell; `exit 1`
+# there ends that subshell with status 1, which becomes the pipeline's exit status and aborts
+# the surrounding `&&` chain before the merge/switch. `update`'s behavior changes only in that
+# it now stops on such a failure instead of silently continuing past it.
 move_aside_cmd() {
   local range="$1"
-  echo "aside=_moved_aside/\$(date -u +%Y%m%dT%H%M%SZ) && \
-        git diff --name-only --diff-filter=A $range | while IFS= read -r f; do \
+  echo "git diff --name-only --no-renames --diff-filter=A $range | while IFS= read -r f; do \
           if [ -e \"\$f\" ] && ! git ls-files --error-unmatch -- \"\$f\" >/dev/null 2>&1; then \
             mkdir -p \"\$aside/\$(dirname -- \"\$f\")\" && mv -- \"\$f\" \"\$aside/\$f\" && \
-            echo \"moved aside (untracked, incoming commit adds it): \$f -> \$aside/\$f\"; \
+            echo \"moved aside (untracked, incoming commit adds it): \$f -> \$aside/\$f\" || exit 1; \
+          fi; done"
+}
+
+# `switch`-only fragment (Ruling 23, 2026-09-11): `git switch` also refuses on a path that is
+# TRACKED but modified relative to HEAD (working tree or index) if the target branch also
+# changes that path -- a different git safety check than the untracked one move_aside_cmd
+# handles, hit for real the first time this switch shipped (rung 0's evidence commit touched
+# figures/ and docs/tasks/rung0-assay-reliability/ paths already modified on the Alpine
+# checkout by having run rung 0 there). Given the target ref (e.g. "origin/<branch>"), echoes
+# the fragment that finds every path git diff --name-only HEAD reports modified AND that
+# differs between HEAD and the target, copies each into $aside (never deletes, never restores
+# without copying first: `cp -p` before `git checkout HEAD --`, chained with `&&` so a failed
+# `cp` never reaches the checkout), and restores it to HEAD's content so `git switch` no longer
+# sees a conflicting local change. `update` never had this case (a fast-forward never rewrites
+# a tracked file's committed content out from under a local edit the way a branch switch does),
+# so this is not folded into move_aside_cmd. Same `|| exit 1` loud-failure rule as above.
+copy_aside_cmd() {
+  local target="$1"
+  echo "git diff --name-only HEAD | while IFS= read -r f; do \
+          if ! git diff --quiet HEAD \"$target\" -- \"\$f\"; then \
+            mkdir -p \"\$aside/\$(dirname -- \"\$f\")\" && cp -p -- \"\$f\" \"\$aside/\$f\" && \
+            git checkout HEAD -- \"\$f\" && \
+            echo \"copied aside (tracked, modified locally, target changes it): \$f -> \$aside/\$f\" || exit 1; \
           fi; done"
 }
 
@@ -184,14 +223,27 @@ case "$sub" in
     # "untracked working tree files would be overwritten" -- the exact case `update` already
     # solves for fast-forwards via move_aside_cmd (see update's comment below for the policy).
     # HEAD and the switch target can have diverged histories (this moves BETWEEN task
-    # branches, not along one), so this compares HEAD directly against origin/<branch> rather
-    # than relying on @{u}, which names switch's post-merge upstream, not its pre-switch source.
+    # branches, not along one): BEFORE the switch runs, `@{u}` still names the CURRENT
+    # branch's upstream, not the target's, so it cannot stand in for the target here -- this
+    # compares HEAD directly against origin/<branch> instead.
+    #
+    # Tracked copy-aside added 2026-09-11 (Ruling 23), after trying this switch on Alpine for
+    # real: the untracked move-aside above fixed the first refusal, but `git switch` then hit a
+    # SECOND one -- "Your local changes ... would be overwritten by checkout" -- on rung 0
+    # output paths that were both TRACKED and modified on the Alpine checkout (e.g.
+    # figures/01_build.png), which the target branch also changes. copy_aside_cmd handles that
+    # case into the same $aside directory; see its comment above for why it isn't in
+    # move_aside_cmd.
     [[ $# -eq 1 ]] || die "usage: ralpine switch <branch>"
     [[ "$1" =~ ^[A-Za-z0-9._/-]+$ ]] || die "refusing '$1': not a plausible branch name"
+    [[ "$1" != -* ]] || die "refusing '$1': a branch name cannot begin with '-'"
     branch_q="$(printf '%q' "$1")"
     move_aside="$(move_aside_cmd "HEAD origin/$branch_q")"
+    copy_aside="$(copy_aside_cmd "origin/$branch_q")"
     remote_fixed "cd $(printf '%q' "$REMOTE_ROOT") && git fetch --quiet origin && \
+                  $ASIDE_INIT && \
                   $move_aside && \
+                  $copy_aside && \
                   git switch --guess $branch_q && \
                   git merge --ff-only @{u} && \
                   git rev-parse --short HEAD"
@@ -216,6 +268,7 @@ case "$sub" in
     # still refuses, the checkout has diverged and a human should look before anything.
     move_aside="$(move_aside_cmd "HEAD..@{u}")"
     remote_fixed "cd $(printf '%q' "$REMOTE_ROOT") && git fetch --quiet origin && \
+                  $ASIDE_INIT && \
                   $move_aside && \
                   git merge --ff-only @{u} && git rev-parse --short HEAD"
     ;;
