@@ -4,11 +4,11 @@
 The spec says what each rung must establish and what a passing result means; this document says where each one stands.
 It carries no history: a rung's result belongs here, how it came to be belongs in git and in that rung's spec.
 
-**As of** 2026-08-27.
+**As of** 2026-09-10.
 
 A number not carried here with its provenance record is not evidence.
 Promotion means a result in `results/<task-slug>/` with a `<result>.provenance.json` beside it recording the commit, job and inputs that produced it — project rule 1.
-No `results/` directory exists yet, so nothing in this repository is evidence of anything.
+Rung 0's dose-fixed run is complete and verified (77 of 79 battery checks; the two failures are the superseded dose-pooled promotion of 2026-09-02, whose withdrawal is pending), with every dose-level ceiling clearing floors drawn at its own dose, and awaits its re-audit and that withdrawal before promotion. The one promoted result is that superseded pooled number. No rung is closed.
 
 ---
 
@@ -16,7 +16,7 @@ No `results/` directory exists yet, so nothing in this repository is evidence of
 
 | Rung | What the spec requires | Status |
 |---|---|---|
-| 0 — replicate ceiling | A reproducibility ceiling clearing its null, on the declared panel | Not started |
+| 0 — assay reliability | Two reproducibility ceilings clearing their nulls at the assay's full extent — all genes, and each condition's responders — with replicate noise decomposed into plate and cell-sampling parts | **Run complete and verified, not yet promoted.** Dose held fixed, plates split alternately, on branch `rung0-assay-reliability` ([design](tasks/rung0-assay-reliability/design.md) · [summary](tasks/rung0-assay-reliability/summary.ipynb) · [verification](tasks/rung0-assay-reliability/verification.md)): over 7,641 replicated (line, drug, dose) triples the all-gene split-half is **0.065** (Spearman-Brown **0.122**) and the responder split-half **0.430** (**0.601**) over 6,654, both clearing their floors at p = 0.0005. The responder ceiling is a 5 uM property: **0.577** there against 0.136 and 0.035 at the two lower doses, which the dose figure shows and the strata table carries; the declared ceilings are the dose-level ones (2026-09-11), each read against floors drawn at its own dose: all six clear them, responders at 0.5 uM narrowly (0.035 against 0.024, p 0.026, with under 80% power). Noise: the published standard errors exceed the across-plate variance for all genes, so no plate component is detectable there. The superseded dose-pooled promotion (0.118 / 0.559, wrong provenance commit) awaits withdrawal |
 | 1 — held-out line | Prediction beating a floor and recovering a planted signal, as a fraction of rung 0 | Not started |
 | 2 — bulk read by a single-cell model | A synthesised population landing near the same material's real single cells, clearing a mismatched-line null | Not started |
 | 3 — cross-platform | Retention separable from a scrambled-line control | Not started |
@@ -32,13 +32,15 @@ A rung closes when its result is promoted with provenance, this table records it
 | Present | Consequence |
 |---|---|
 | Schema, determinism and adapter scaffolding, with tests | The apparatus a rung is added to exists; nothing here yet produces a measurement |
-| No `results/` directory | Rung 0 is the first work to promote a number, and the first to be held to the rules in the spec |
+| One promoted result, `results/rung0-assay-reliability/` | Rung 0 is the first work held to the spec's rules. The number is provisional and its provenance record says why; the rung is not closed |
 | `docs/adapter_contract.md` and `docs/environment.md`, predating this spec | Neither has been reconciled against it. The rung that first depends on either brings it into line rather than a sweep that touches everything at once |
 
 ## Where things live
 
 - **Results** `results/<task-slug>/<result>.csv` with `<result>.provenance.json` beside it. No provenance record, no evidence.
-- **Figures** produced by a run, pointed at from that task's `verification.md`; a figure the project cites is promoted alongside its table.
+- **Figures** produced by a run into `docs/tasks/<slug>/figures/`, never drawn by hand, each drawn from a committed table and shown beside its control; declared per step in that task's `design.md`, pointed at from `verification.md`, and walked through in `summary.ipynb`. A figure the project cites is promoted alongside its table.
+- **The reviewer's two notebooks** `summary.ipynb` explains the finding step by step with its figures; `verify.ipynb` recomputes every promoted claim inline from the committed artifacts. Both are committed without outputs.
+- **Audits** `docs/tasks/<slug>/audit.md`, following the repository standard in [`docs/audit.md`](audit.md).
 - **Rung and task specs** `docs/tasks/<slug>/design.md`, one folder per task, arriving with the work it specifies.
 - **Decisions** dated and appended to the bottom of the task's own `design.md` and `plan.md`, so a reversal travels with the document it reverses.
 - **Rules and their tests** `docs/SPEC.md` and `tests/test_project_rules.py`.
