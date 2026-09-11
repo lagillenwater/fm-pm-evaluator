@@ -16,6 +16,9 @@ dependencies = [
     "duckdb>=1.0",
     "pyarrow>=15",
     "matplotlib>=3.8",
+    "scikit-learn>=1.4",
+    "scipy>=1.11",
+    "rdkit>=2024.3",
 ]
 
 [project.optional-dependencies]
@@ -75,4 +78,5 @@ markers = [
     "step_decompose: splitting replicate noise into its between-plate and within-plate parts",
     "step_null: building the negative-control distribution a statistic is read against",
     "known_answer: plants a known answer and requires the real, shipped function to recover it",
+    "step_fit: fitting a model on training data",
 ]

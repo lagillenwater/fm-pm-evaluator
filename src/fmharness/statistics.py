@@ -94,6 +94,40 @@ def minimum_detectable_aggregate(
     return float(crit - np.quantile(boot_centred, 1.0 - power))
 
 
+def masked_rowwise_pearson(
+    a: np.ndarray, b: np.ndarray, min_genes: int, *, select: np.ndarray | None = None
+) -> np.ndarray:
+    """Pearson r per row between ``a`` and ``b``, over entries finite in both.
+
+    Vectorized across rows; rows with fewer than ``min_genes`` shared finite entries or
+    zero variance come back NaN.
+
+    ``select`` is an optional boolean array of the same shape restricting each row to its own
+    subset of columns -- rung 0's responder gene set. A false entry is treated exactly as a
+    non-finite one, so every moment below (the count, both means, the covariance and both
+    variances) is taken over the selected genes alone. Centring after masking is the part that
+    matters: subtracting a mean computed over all genes would leave the selected columns
+    off-centre and the correlation would not be the correlation of what was scored.
+    """
+    ok = np.isfinite(a) & np.isfinite(b)
+    if select is not None:
+        ok &= select
+    n = ok.sum(axis=1)
+    a0 = np.where(ok, a, 0.0)
+    b0 = np.where(ok, b, 0.0)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        ma = a0.sum(axis=1) / n
+        mb = b0.sum(axis=1) / n
+        ac = np.where(ok, a - ma[:, None], 0.0)
+        bc = np.where(ok, b - mb[:, None], 0.0)
+        cov = (ac * bc).sum(axis=1)
+        va = (ac**2).sum(axis=1)
+        vb = (bc**2).sum(axis=1)
+        r = cov / np.sqrt(va * vb)
+    r[(n < min_genes) | (va <= 0) | (vb <= 0)] = np.nan
+    return r
+
+
 def spearman_brown(r: float) -> float:
     """Lift a split-half reliability to full-data reliability: ``2r / (1 + r)``.
 
