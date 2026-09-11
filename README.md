@@ -12,7 +12,7 @@ wrong.
 | Rung | Question it settles |
 |---|---|
 | 0 | Is the target reproducible? |
-| 1 | Can a model predict an unseen cell line, in-distribution? |
+| 1 | Can a model predict a cell line or a drug it has not seen? |
 | 2 | Can a bulk sample be read by a single-cell model? |
 | 3 | What does crossing a measurement platform cost? |
 | 4 | Does the representation predict drug response, not just expression? |
@@ -70,6 +70,9 @@ at its own dose. Responders reproduce at 0.577 at 5 uM (Spearman-Brown 0.732) an
 two lower doses; over all genes the split-half is 0.081, 0.029 and 0.024. The mean over all
 replicated triples is reported, not divided by. The dose-pooled promotion of 2026-09-02 is
 withdrawn.
+Rung 1 — predicting a cell line or a drug the model has not seen, and whether Stack's embeddings do it better
+than the drug's average or expression-based descriptions — has an approved design and is being built on
+`rung1-held-out-prediction-work` ([design](docs/tasks/rung1-held-out-prediction/design.md)).
 [`docs/STATE.md`](docs/STATE.md) is authoritative.
 
 ## Quickstart
