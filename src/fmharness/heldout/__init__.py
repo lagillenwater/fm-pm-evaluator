@@ -17,9 +17,7 @@ from typing import Literal
 
 ModelKind = Literal["reference", "ridge", "nearest_lines", "random"]
 Scheme = Literal["lolo", "lodo"]
-Description = Literal[
-    "expression", "pca", "nmf", "stack_base", "stack_cytokine", "stack_drug"
-]
+Description = Literal["expression", "pca", "nmf", "stack_base", "stack_cytokine", "stack_drug"]
 Hypothesis = Literal["H1(a)", "H1(b)", "H2"]
 
 
@@ -93,4 +91,4 @@ COMPARISONS: tuple[Comparison, ...] = (
     _comparison("lodo", "stack_drug", "stack_cytokine", "H2"),
 )
 
-__all__ = ["Comparison", "ModelSpec", "MODELS", "COMPARISONS"]
+__all__ = ["COMPARISONS", "MODELS", "Comparison", "ModelSpec"]

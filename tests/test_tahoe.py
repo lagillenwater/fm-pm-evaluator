@@ -1,5 +1,11 @@
 """Tests for the pure Tahoe ingest helpers (the datasets streaming is Alpine-only)."""
 
+# scipy ships no PEP-561 type stubs in this environment; under strict mode that turns every
+# scipy call site into a cascade of reportUnknown* noise about *its* types, not ours. Same
+# suppression, same rationale as the rest of this project's pyright strict config where it
+# touches scientific-Python packages -- the rules that check our own code stay on.
+# pyright: reportMissingTypeStubs=false, reportUnknownMemberType=false, reportUnknownArgumentType=false, reportUnknownVariableType=false, reportUnknownParameterType=false, reportUnknownLambdaType=false
+
 from __future__ import annotations
 
 import numpy as np

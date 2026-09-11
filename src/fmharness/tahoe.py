@@ -6,6 +6,12 @@ panel, and parsing the dose string. The streaming / IO is in
 ``scripts/build_tahoe_context.py`` (Alpine-only, needs the ``datasets`` package).
 """
 
+# pandas and scipy ship no PEP-561 type stubs in this environment; under strict mode that turns
+# every call site into a cascade of reportUnknown* noise about *their* types, not ours. Same
+# suppression, same rationale as the rest of this project's pyright strict config where it
+# touches scientific-Python packages -- the rules that check our own code stay on.
+# pyright: reportMissingTypeStubs=false, reportUnknownMemberType=false, reportUnknownArgumentType=false, reportUnknownVariableType=false, reportUnknownParameterType=false, reportUnknownLambdaType=false
+
 from __future__ import annotations
 
 import ast
