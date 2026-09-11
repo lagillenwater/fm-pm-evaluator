@@ -1,4 +1,4 @@
-"""Rung 1's models: what each one predicts for a hidden line (task 8 adds a hidden drug).
+"""Rung 1's models: what each one predicts for a hidden line or a hidden drug.
 
 Design.md section 5. When a line is hidden, a model is given the other lines' measured changes
 for every drug and a description of every line's untreated state, and predicts the hidden line's
@@ -19,24 +19,46 @@ change for every drug and gene:
   correlate most with the hidden line's (``similarity_from_description``); k is chosen by
   leave-one-line-out error.
 
+When a drug is hidden, a model is given every line's measured changes for the other drugs, the
+drugs' chemical similarity ``T`` (Tanimoto similarity of Morgan fingerprints) and a description
+of every line, and predicts the hidden drug's change in every line and gene:
+
+* ``ridge_lodo`` -- for each gene, one ridge regression over every training (line, drug) pair
+  at once, of each line's departures from its mean over the training drugs, in kernel form with
+  the kernel ``T[d, d'] * (1 + K_line[l, l'])``: chemically similar drugs share effects, on
+  average (the 1) and in lines with similar descriptions (``K_line``). The hidden drug's
+  predicted departure is added back to each line's mean. One penalty is shared by every gene,
+  chosen by the exact leave-one-drug-out error, computed in closed form (invariant 6).
+* chemistry only -- ``ridge_lodo`` with ``K_line`` all zeros: similar drugs share effects on
+  average, whatever the line.
+* ``ridge_lodo_k`` -- the same, choosing the number of PCA or NMF components jointly with the
+  penalty.
+
 Conventions every function shares. ``delta0`` is the answer array ``[L, D, G]`` with untested
 entries set to 0 (untested genes count as zero change in training); ``tested`` marks the entries
 the screen measured. Tuning losses are mean squared leave-one-out error over tested training
-entries only (invariant 7). Each leave-one-out fit re-estimates the drug average without the
-left-out line, exactly and in closed form (invariant 6): an average held at its full training
-value would still contain the left-out line's answer, and a centred description hands that
-back to it at small penalties, so wide descriptions would look best on pure noise. No function
-reads the hidden line's answers (invariant 1): training blocks are taken by indexing the
-training lines, and means over lines are masked sums that never add a line outside the mask.
+entries only (invariant 7). Each leave-one-out fit re-estimates the round's reference -- the
+drug average without the left-out line, or each line's mean without the left-out drug --
+exactly and in closed form (invariant 6): a reference held at its full training value would
+still contain the left-out unit's answer and bias every tuning loss. Leaving a line out, a
+centred description hands that answer back at small penalties, so wide descriptions would look
+best on pure noise. No function reads the hidden unit's answers (invariant 1): training blocks
+are taken by indexing the training lines or drugs, and means over lines are masked sums that
+never add a line outside the mask.
 
 At full size one array of departures (49 training lines x 107 drugs x ~45k genes) is ~1.9 GB of
-float64, so fits process drugs in blocks sized to a byte budget (``MAX_BYTES``). Every per-drug
-quantity is computed the same way whatever the block size and combined across drugs once at
-the end, so a fit's result does not depend on the budget, bit for bit.
+float64, so fits process data in blocks sized to a byte budget (``MAX_BYTES``): drugs when a
+line is hidden, genes when a drug is hidden (genes are independent given the two kernels).
+When a line is hidden, every per-drug quantity is computed the same way whatever the block size
+and combined across drugs once at the end, so a fit's result does not depend on the budget,
+bit for bit. When a drug is hidden, the per-block loss sums and matrix products change shape
+with the block size, so results agree across budgets to rounding (1e-12 relative), not bit for
+bit.
 """
 
 from __future__ import annotations
 
+import itertools
 import operator
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -58,7 +80,8 @@ MAX_BYTES = 2 * 1024**3
 class Fit:
     """One model's prediction in one round, and the setting its tuning chose.
 
-    ``prediction`` -- the hidden unit's predicted change: ``[D, G]`` when a line is hidden.
+    ``prediction`` -- the hidden unit's predicted change: ``[D, G]`` when a line is hidden,
+    ``[L, G]`` when a drug is hidden.
     ``lam`` -- the chosen ridge penalty; ``None`` for a model without one.
     ``k`` -- the chosen number of description components (ridge over PCA or NMF) or of nearest
     lines; ``None`` when the model chooses no such number.
@@ -76,7 +99,19 @@ class Fit:
 
 
 # ==============================================================================================
-# Shared by both schemes: drug blocks, input checks, masked means
+# Shared by both schemes: drug and gene blocks, input checks, masked means
+
+
+def _blocks(n: int, bytes_each: int, max_bytes: int, kind: str) -> list[tuple[int, int]]:
+    """Consecutive ``(start, stop)`` ranges over ``n`` drugs or genes (``kind``), each holding as
+    many as ``max_bytes`` allows at ``bytes_each``; ``ValueError`` when one alone needs more."""
+    if bytes_each > max_bytes:
+        raise ValueError(
+            f"one {kind} needs {bytes_each:,} bytes of working arrays, over the max_bytes "
+            f"budget of {max_bytes:,}"
+        )
+    per_block = max_bytes // max(1, bytes_each)
+    return [(start, min(start + per_block, n)) for start in range(0, n, per_block)]
 
 
 def drug_blocks(n_drugs: int, bytes_per_drug: int, max_bytes: int) -> list[tuple[int, int]]:
@@ -86,13 +121,13 @@ def drug_blocks(n_drugs: int, bytes_per_drug: int, max_bytes: int) -> list[tuple
     Raises ``ValueError`` when a single drug alone needs more than ``max_bytes``: a block cannot
     be smaller than one drug, so the budget cannot be met.
     """
-    if bytes_per_drug > max_bytes:
-        raise ValueError(
-            f"one drug needs {bytes_per_drug:,} bytes of working arrays, over the max_bytes "
-            f"budget of {max_bytes:,}"
-        )
-    per_block = max_bytes // max(1, bytes_per_drug)
-    return [(start, min(start + per_block, n_drugs)) for start in range(0, n_drugs, per_block)]
+    return _blocks(n_drugs, bytes_per_drug, max_bytes, "drug")
+
+
+def gene_blocks(n_genes: int, bytes_per_gene: int, max_bytes: int) -> list[tuple[int, int]]:
+    """Consecutive ``(start, stop)`` gene ranges, each holding as many genes as ``max_bytes``
+    allows at ``bytes_per_gene``; ``ValueError`` when a single gene alone needs more."""
+    return _blocks(n_genes, bytes_per_gene, max_bytes, "gene")
 
 
 def _check_answers(delta0: np.ndarray, tested: np.ndarray) -> None:
@@ -105,11 +140,29 @@ def _check_answers(delta0: np.ndarray, tested: np.ndarray) -> None:
         )
 
 
-def _check_square(matrix: np.ndarray, n_lines: int, name: str) -> None:
-    if matrix.shape != (n_lines, n_lines):
-        raise ValueError(f"{name} must be [{n_lines}, {n_lines}]; got shape {matrix.shape}")
+def _check_square(matrix: np.ndarray, size: int, name: str) -> None:
+    if matrix.shape != (size, size):
+        raise ValueError(f"{name} must be [{size}, {size}]; got shape {matrix.shape}")
     if not np.isfinite(matrix).all():
         raise ValueError(f"{name} has non-finite entries")
+
+
+def _component_kernels(
+    descriptions: Mapping[int, np.ndarray], n_lines: int
+) -> tuple[list[int], list[np.ndarray]]:
+    """The candidate component counts in increasing order, and each one's normalized linear
+    kernel; ``ValueError`` unless every description is a finite ``[L, k]`` array."""
+    ks = sorted(descriptions)
+    if not ks:
+        raise ValueError("descriptions must hold at least one component count")
+    misshapen = [
+        k
+        for k in ks
+        if descriptions[k].shape != (n_lines, k) or not np.isfinite(descriptions[k]).all()
+    ]
+    if misshapen:
+        raise ValueError(f"descriptions for k={misshapen} are not finite [{n_lines}, k] arrays")
+    return ks, [linear_kernel(descriptions[k]) for k in ks]
 
 
 def _check_lambdas(lambdas: np.ndarray) -> np.ndarray:
@@ -159,14 +212,14 @@ def drug_average(delta0: np.ndarray, train: np.ndarray) -> np.ndarray:
 # Leave one line out
 
 
-def _training_lines(n_lines: int, held: int) -> np.ndarray:
-    """Every line index except ``held``, in order."""
+def _training_indices(n: int, held: int, kind: str) -> np.ndarray:
+    """Every line or drug index (``kind``) except ``held``, in order."""
     held = operator.index(held)
-    if not 0 <= held < n_lines:
-        raise ValueError(f"held line {held} is outside 0..{n_lines - 1}")
-    if n_lines < 3:
-        raise ValueError("leaving one line out of training needs at least 3 lines")
-    return np.flatnonzero(np.arange(n_lines) != held)
+    if not 0 <= held < n:
+        raise ValueError(f"held {kind} {held} is outside 0..{n - 1}")
+    if n < 3:
+        raise ValueError(f"leaving one {kind} out of training needs at least 3 {kind}s")
+    return np.flatnonzero(np.arange(n) != held)
 
 
 def _training_block(
@@ -233,6 +286,11 @@ def _ridge_errors_op(u: np.ndarray, s: np.ndarray, lambdas: np.ndarray) -> np.nd
     training lines, it gives each training line's error when that line is left out of the fit
     AND of the drug average, for every drug and gene at once.
 
+    ``s`` may carry leading axes, ``[..., T]``: one spectrum per ridge problem, all sharing the
+    eigenvectors ``u``, giving ``[len(lambdas), ..., T, T]``. Leave one drug out uses this, with
+    drugs in place of lines and one spectrum per line eigencomponent
+    (``_leave_one_drug_out_ops``).
+
     Step 1, the average held fixed. For penalty ``λ`` the dual coefficients are
     ``alpha = (K + λI)⁻¹ R``, the fitted departures ``K alpha = H R`` with hat matrix
     ``H = U diag(s/(s+λ)) Uᵀ``, and the training residual ``R - K alpha = M R`` with
@@ -255,12 +313,15 @@ def _ridge_errors_op(u: np.ndarray, s: np.ndarray, lambdas: np.ndarray) -> np.nd
     ``i``'s own answer back to it at small penalties.
     """
     n_train = int(u.shape[0])
-    penalty = lambdas[:, None]
-    residual_map = np.matmul(u * (penalty / (s + penalty))[:, None, :], u.T)
+    penalty = lambdas.reshape(-1, *([1] * s.ndim))
+    residual_map = np.matmul(u * (penalty / (s + penalty))[..., None, :], u.T)
     # 1 - h_i read off M's diagonal: subtracting h_i from 1 cancels digits when h_i is near 1.
-    errors = residual_map / np.diagonal(residual_map, axis1=1, axis2=2)[:, :, None]
+    # E is formed in M's own memory (dividing by a copy of its diagonal), so the operator is
+    # held once, not twice -- under leave one drug out it is hundreds of megabytes.
+    errors = residual_map
+    errors /= np.diagonal(residual_map, axis1=-2, axis2=-1).copy()[..., :, None]
     diagonal = np.arange(n_train)
-    errors[:, diagonal, diagonal] += errors.sum(axis=2) / (n_train - 1)
+    errors[..., diagonal, diagonal] += errors.sum(axis=-1) / (n_train - 1)
     return errors
 
 
@@ -311,7 +372,7 @@ def ridge_lolo(
     """
     _check_answers(delta0, tested)
     n_lines = delta0.shape[0]
-    lines = _training_lines(n_lines, held)
+    lines = _training_indices(n_lines, held, "line")
     _check_square(kernel, n_lines, "kernel")
     grid = _check_lambdas(lambdas)
     centre = _line_mean(delta0, lines)
@@ -350,19 +411,9 @@ def ridge_lolo_k(
     """
     _check_answers(delta0, tested)
     n_lines = delta0.shape[0]
-    lines = _training_lines(n_lines, held)
+    lines = _training_indices(n_lines, held, "line")
     grid = _check_lambdas(lambdas)
-    ks = sorted(descriptions)
-    if not ks:
-        raise ValueError("descriptions must hold at least one component count")
-    misshapen = [
-        k
-        for k in ks
-        if descriptions[k].shape != (n_lines, k) or not np.isfinite(descriptions[k]).all()
-    ]
-    if misshapen:
-        raise ValueError(f"descriptions for k={misshapen} are not finite [{n_lines}, k] arrays")
-    kernels = [linear_kernel(descriptions[k]) for k in ks]
+    ks, kernels = _component_kernels(descriptions, n_lines)
     eigens = [_training_eigen(kernel, lines) for kernel in kernels]
     centre = _line_mean(delta0, lines)
     errors_op = np.concatenate([_ridge_errors_op(u, s, grid) for u, s in eigens])
@@ -430,7 +481,7 @@ def nearest_lines_lolo(
     """
     _check_answers(delta0, tested)
     n_lines = delta0.shape[0]
-    lines = _training_lines(n_lines, held)
+    lines = _training_indices(n_lines, held, "line")
     _check_square(similarity, n_lines, "similarity")
     candidates = np.asarray(ks, dtype=np.int64)
     if candidates.ndim != 1 or candidates.size == 0 or (candidates < 1).any():
@@ -452,13 +503,297 @@ def nearest_lines_lolo(
     )
 
 
+# ==============================================================================================
+# Leave one drug out
+
+
+def _drug_departures(
+    delta0: np.ndarray, drugs: np.ndarray, start: int, stop: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """``(means, departures)`` for genes ``start:stop``: each line's mean over the training drugs
+    ``drugs``, ``[L, genes]``, and the training answers less it, a C-contiguous float64
+    ``[L, drugs, genes]`` block.
+
+    ``np.take`` copies only the listed drugs, so no other drug's answer is read, and the block
+    is this function's own memory to centre in place.
+    """
+    block = np.take(delta0[:, :, start:stop], drugs, axis=1).astype(np.float64, copy=False)
+    means = block.mean(axis=1)
+    block -= means[:, None, :]
+    return means, block
+
+
+def _leave_one_drug_out_ops(
+    line_s: np.ndarray, drug_u: np.ndarray, drug_s: np.ndarray, lambdas: np.ndarray
+) -> np.ndarray:
+    """Kernel ridge's exact leave-one-drug-out error operators, ``[len(lambdas), K, L, Dt, Dt]``.
+
+    ``line_s`` is ``[K, L]``, the eigenvalues of ``K`` line factors
+    ``1 + K_line = U_l diag(s_l) U_lᵀ``; ``drug_u`` and ``drug_s`` diagonalize the ``Dt`` training
+    drugs' similarity, ``T_d = U_d diag(s_d) U_dᵀ``. Operator ``[λ, k, c]`` acts along the drug
+    axis on line eigencomponent ``c`` of the departures, ``(U_lᵀ R)[c]``, and gives component
+    ``c`` of every training drug's error when that drug is left out of the fit AND of the line
+    means; rotating back by ``U_l`` gives the errors line by line.
+
+    Fix one gene. ``x[l, j]`` is line ``l``'s answer to training drug ``j``, ``a[l]`` its mean over
+    the training drugs, ``R = x - a`` (each line's departures sum to 0 over drugs). On pairs in
+    (line, drug) order the kernel is ``K = (1 + K_line) ⊗ T_d``, with eigenvectors ``U_l ⊗ U_d``
+    and eigenvalues ``w[c, a] = s_l[c] s_d[a]``, so the hat matrix is
+    ``H = (U_l ⊗ U_d) diag(w/(w+λ)) (U_l ⊗ U_d)ᵀ``.
+
+    Step 1, the line means held fixed. Leaving drug ``j`` out removes the block of its ``L``
+    pairs. Ridge's block leave-out identity, exact for any targets ``y`` (from the partitioned
+    inverse of ``K + λI``, as ``I - H = λ(K + λI)⁻¹``): the block's error when it is left out of
+    the fit is ``r_j = (I - H_jj)⁻¹ ((I - H) y)_j``, where ``H_jj`` is ``H``'s ``L``-by-``L`` block
+    for drug ``j``. Here ``H_jj = U_l diag(h_j) U_lᵀ`` with
+    ``h_j[c] = Σ_a U_d[j,a]² w[c,a]/(w[c,a]+λ)``: the block shares the line eigenvectors, so its
+    inverse is diagonal in that basis and ``(U_lᵀ r_j)[c] = (U_lᵀ (I - H) R)[c, j] / (1 - h_j[c])``.
+    With ``M_c = U_d diag(λ/(w[c]+λ)) U_dᵀ`` the numerator is ``(M_c (U_lᵀ R)[c])_j``, and as
+    ``Σ_a U_d[j,a]² = 1``, ``1 - h_j[c] = M_c[j, j]``, read off the diagonal without subtracting
+    from 1. So component ``c`` is ordinary leave-one-out ridge over drugs with the kernel
+    ``s_l[c] T_d``: ``E_c = diag(1/M_c[j, j]) M_c``, step 1 of ``_ridge_errors_op``.
+
+    Step 2, re-estimating the line means without drug ``j``. They become
+    ``a₋ⱼ = a - R[:, j]/(Dt-1)``, so the other drugs' departures from them are the fixed-mean
+    targets plus ``v_j ⊗ 1``, with ``v_j = R[:, j]/(Dt-1)`` the same for every drug. Drug
+    ``j``'s prediction is linear in its targets, so its error is the step-1 error plus
+    ``v_j - f_j(v_j ⊗ 1)``: the block leave-out error of the target ``v_j ⊗ 1`` over all training
+    drugs. By the same identity its component ``c`` is ``(U_lᵀ v_j)[c] (1 - g_j[c])/(1 - h_j[c])``,
+    where ``1 - g_j[c] = Σ_a U_d[j,a] (U_dᵀ 1)[a] λ/(w[c,a]+λ) = (M_c 1)_j`` (as
+    ``U_d U_dᵀ 1 = 1``), again not a subtraction from 1. Hence
+    ``(U_lᵀ r'_j)[c] = (E_c (U_lᵀ R)[c])_j + (U_lᵀ R)[c, j] (E_c 1)_j / (Dt-1)``: component by
+    component ``E'_c = E_c + diag(E_c 1)/(Dt-1)``, step 2 of ``_ridge_errors_op``, which builds
+    every component's operator at once from the batch of spectra ``w``. Without step 2 each
+    line's fixed mean would still hold the left-out drug's answer.
+    """
+    return _ridge_errors_op(drug_u, line_s[:, :, None] * drug_s, lambdas)
+
+
+def _block_squared_errors(
+    line_u: np.ndarray, errors_op: np.ndarray, departures: np.ndarray, measured: np.ndarray
+) -> np.ndarray:
+    """One gene block's summed squared leave-one-drug-out errors over its tested entries,
+    ``[K, S]``, from its departures ``[L, Dt, n]`` and tested marks of the same shape.
+
+    The departures are rotated into each kernel's line eigenbasis once; then, setting by
+    setting, the operator is applied along the drug axis, the result rotated back to lines and
+    squared where the screen tested it. Each setting writes into the same two work arrays.
+    """
+    n_settings, n_kernels, n_lines = errors_op.shape[:3]
+    weights = measured.reshape(n_lines, -1).astype(np.float64)
+    rotated = np.matmul(np.swapaxes(line_u, 1, 2), departures.reshape(n_lines, -1))
+    rotated = rotated.reshape((n_kernels, *departures.shape))
+    rotated_errors = np.empty(departures.shape)
+    errors = np.empty(weights.shape)
+    sums = np.empty((n_kernels, n_settings))
+    for k, s in itertools.product(range(n_kernels), range(n_settings)):
+        np.matmul(errors_op[s, k], rotated[k], out=rotated_errors)
+        np.matmul(line_u[k], rotated_errors.reshape(n_lines, -1), out=errors)
+        masked = np.multiply(errors, weights, out=rotated_errors.reshape(n_lines, -1))
+        sums[k, s] = np.dot(errors.ravel(), masked.ravel())
+    return sums
+
+
+def _leave_one_drug_out_losses(
+    line_u: np.ndarray,
+    errors_op: np.ndarray,
+    delta0: np.ndarray,
+    tested: np.ndarray,
+    drugs: np.ndarray,
+    max_bytes: int,
+) -> np.ndarray:
+    """Mean squared leave-one-drug-out error over tested training entries, ``[K, S]``: one per
+    line kernel ``k`` (eigenvectors ``line_u[k]``) and setting ``s`` of ``errors_op[s, k]``.
+
+    Genes are processed in blocks, as many as ``max_bytes`` holds once the operators are
+    counted (``_block_squared_errors``); the blocks' sums are added before any setting is
+    chosen.
+    """
+    n_settings, n_kernels = errors_op.shape[:2]
+    n_lines, _, n_genes = delta0.shape
+    # per gene, in float64 [L, Dt] units: the departures (and a float32 input's transient copy),
+    # the tested marks as weights, the K rotated departures, and the two work arrays
+    bytes_per_gene = (n_kernels + 5) * n_lines * drugs.size * 8
+    room = max_bytes - errors_op.nbytes
+    if room < bytes_per_gene:
+        raise ValueError(
+            f"the leave-one-drug-out operators ({errors_op.nbytes:,} bytes) and one gene's "
+            f"working arrays ({bytes_per_gene:,} bytes) exceed the max_bytes budget of "
+            f"{max_bytes:,}"
+        )
+    totals = np.zeros((n_kernels, n_settings))
+    n_tested = 0
+    for start, stop in gene_blocks(n_genes, bytes_per_gene, room):
+        _, departures = _drug_departures(delta0, drugs, start, stop)
+        measured = np.take(tested[:, :, start:stop], drugs, axis=1)
+        n_tested += int(np.count_nonzero(measured))
+        totals += _block_squared_errors(line_u, errors_op, departures, measured)
+        del departures, measured  # released before the next block is copied
+    if n_tested == 0:
+        raise ValueError("the training drugs have no tested entries to tune on")
+    losses = totals / n_tested
+    if not np.isfinite(losses).all():
+        raise FloatingPointError("a leave-one-out tuning loss is not finite")
+    return losses
+
+
+def _lodo_prediction(
+    line_factor: np.ndarray,
+    line_u: np.ndarray,
+    line_s: np.ndarray,
+    drug_u: np.ndarray,
+    drug_s: np.ndarray,
+    similarity: np.ndarray,
+    lam: float,
+    delta0: np.ndarray,
+    drugs: np.ndarray,
+    max_bytes: int,
+) -> np.ndarray:
+    """The hidden drug's predicted change in every line and gene, ``[L, G]``.
+
+    Ridge's prediction in kernel form is ``a + (1 + K_line) (alpha t)``: ``a`` is each line's mean
+    over the training drugs, ``t`` (``similarity``) the hidden drug's similarity to each
+    training drug, and ``alpha = (K + λI)⁻¹ R`` the dual coefficients, ``[L, Dt]`` per gene
+    (``line_factor = 1 + K_line = U_l diag(line_s) U_lᵀ``). In the two eigenbases
+    ``alpha = U_l A U_dᵀ`` with ``A[c, a] = (U_lᵀ R U_d)[c, a] / (w[c, a] + λ)``, so
+    ``alpha t = U_l b`` with ``b[c] = Σ_j Q[c, j] (U_lᵀ R)[c, j]`` and
+    ``Q = ((U_dᵀ t) / (w + λ)) U_dᵀ``: one rotation of each gene block's departures.
+    """
+    n_lines, _, n_genes = delta0.shape
+    drug_weights = ((drug_u.T @ similarity) / (line_s[:, None] * drug_s + lam)) @ drug_u.T
+    to_lines = line_factor @ line_u
+    prediction = np.empty((n_lines, n_genes))
+    # per gene, in float64 [L, Dt] units: the departures (and a float32 input's transient copy)
+    # and their rotation
+    for start, stop in gene_blocks(n_genes, 3 * n_lines * drugs.size * 8, max_bytes):
+        means, departures = _drug_departures(delta0, drugs, start, stop)
+        rotated = np.matmul(line_u.T, departures.reshape(n_lines, -1))
+        rotated = rotated.reshape(departures.shape)
+        coefficients = np.matmul(drug_weights[:, None, :], rotated)[:, 0, :]
+        prediction[:, start:stop] = means + to_lines @ coefficients
+        del departures, rotated  # released before the next block is copied
+    return prediction
+
+
+def _ridge_lodo_fit(
+    line_kernels: Sequence[np.ndarray],
+    ks: Sequence[int] | None,
+    T: np.ndarray,
+    delta0: np.ndarray,
+    tested: np.ndarray,
+    held: int,
+    lambdas: np.ndarray,
+    max_bytes: int,
+) -> Fit:
+    """Ridge when a drug is hidden, over one or more line kernels: the (kernel, penalty) pair
+    with the smallest exact leave-one-drug-out loss, ties to the earlier kernel and then the
+    smaller penalty, and the hidden drug's prediction under it. ``ks`` names the kernels by
+    component count, or is ``None`` for a single kernel with no count."""
+    n_lines, n_drugs, _ = delta0.shape
+    held = operator.index(held)
+    drugs = _training_indices(n_drugs, held, "drug")
+    _check_square(T, n_drugs, "T")
+    grid = _check_lambdas(lambdas)
+    factors = [1.0 + kernel for kernel in line_kernels]
+    every_line = np.arange(int(n_lines))
+    eigens = [_training_eigen(factor, every_line) for factor in factors]
+    line_u = np.stack([u for u, _ in eigens])
+    line_s = np.stack([s for _, s in eigens])
+    drug_u, drug_s = _training_eigen(T, drugs)
+    losses = _leave_one_drug_out_losses(
+        line_u,
+        _leave_one_drug_out_ops(line_s, drug_u, drug_s, grid),
+        delta0,
+        tested,
+        drugs,
+        max_bytes,
+    )
+    k_index, lam_index = (int(i) for i in np.unravel_index(int(np.argmin(losses)), losses.shape))
+    lam = float(grid[lam_index])
+    prediction = _lodo_prediction(
+        factors[k_index],
+        line_u[k_index],
+        line_s[k_index],
+        drug_u,
+        drug_s,
+        T[held, drugs],
+        lam,
+        delta0,
+        drugs,
+        max_bytes,
+    )
+    return Fit(
+        prediction=prediction,
+        lam=lam,
+        k=None if ks is None else ks[k_index],
+        loss_min=float(losses[k_index, lam_index]),
+        at_edge=lam_index in (0, grid.size - 1) or (ks is not None and k_index in (0, len(ks) - 1)),
+    )
+
+
+def ridge_lodo(
+    K_line: np.ndarray,
+    T: np.ndarray,
+    delta0: np.ndarray,
+    tested: np.ndarray,
+    held: int,
+    lambdas: np.ndarray = LAMBDAS,
+    *,
+    max_bytes: int = MAX_BYTES,
+) -> Fit:
+    """Ridge regression on chemistry and a line description, hiding drug ``held``.
+
+    ``K_line`` is the ``[L, L]`` normalized linear kernel of a line description
+    (``descriptions.linear_kernel``), or all zeros for chemistry only; ``T`` is the ``[D, D]``
+    Tanimoto similarity in grid drug order. For every gene, with one penalty shared by all of
+    them, each line's departures from its mean over the training drugs are regressed on the
+    pair kernel ``T[d, d'] * (1 + K_line[l, l'])`` over every training (line, drug) pair. The
+    penalty is the one in ``lambdas`` with the smallest exact leave-one-drug-out loss, each
+    left-out fit re-estimating the line means without its left-out drug
+    (``_leave_one_drug_out_ops``). The prediction, ``[L, G]``, is each line's mean over the
+    training drugs plus ridge's prediction in kernel form for a drug whose similarities to the
+    training drugs are ``T[held, train]`` (``_lodo_prediction``). Only the training drugs'
+    answers and tested marks are read. Pass ``lambdas=np.array([λ])`` to fit at one penalty
+    (a one-value grid's choice is on both its edges, so that ``Fit.at_edge`` is True).
+    """
+    _check_answers(delta0, tested)
+    _check_square(K_line, delta0.shape[0], "K_line")
+    return _ridge_lodo_fit([K_line], None, T, delta0, tested, held, lambdas, max_bytes)
+
+
+def ridge_lodo_k(
+    Zs: Mapping[int, np.ndarray],
+    T: np.ndarray,
+    delta0: np.ndarray,
+    tested: np.ndarray,
+    held: int,
+    lambdas: np.ndarray = LAMBDAS,
+    *,
+    max_bytes: int = MAX_BYTES,
+) -> Fit:
+    """``ridge_lodo`` choosing the number of description components and the penalty together.
+
+    ``Zs`` maps each candidate component count k to its ``[L, k]`` description (PCA or NMF with k
+    components). Each is turned into its normalized linear kernel and fitted as in
+    ``ridge_lodo``; the (k, penalty) pair with the smallest leave-one-drug-out loss is chosen.
+    ``Fit.at_edge`` also flags the smallest or largest candidate k. Ties go to the smaller k,
+    then the smaller penalty.
+    """
+    _check_answers(delta0, tested)
+    ks, kernels = _component_kernels(Zs, delta0.shape[0])
+    return _ridge_lodo_fit(kernels, ks, T, delta0, tested, held, lambdas, max_bytes)
+
+
 __all__ = [
     "LAMBDAS",
     "MAX_BYTES",
     "Fit",
     "drug_average",
     "drug_blocks",
+    "gene_blocks",
     "nearest_lines_lolo",
+    "ridge_lodo",
+    "ridge_lodo_k",
     "ridge_lolo",
     "ridge_lolo_k",
     "similarity_from_description",
