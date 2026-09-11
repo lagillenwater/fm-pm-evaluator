@@ -36,7 +36,7 @@ from fmharness.heldout.cells import (
     superset_mask,
 )
 from fmharness.heldout.grid import Grid
-from fmharness.heldout.records import is_done
+from fmharness.heldout.records import is_done, sha256_file
 from fmharness.schema import Tranche
 
 REPO = Path(__file__).resolve().parents[1]
@@ -98,6 +98,15 @@ def test_cell_keys_dtype_is_uint64() -> None:
     assert cell_keys(0, 0, np.array([0, 1, 2])).dtype == np.uint64
 
 
+def test_cell_keys_splitmix64_known_answer_pin() -> None:
+    """Position (0, 0, 0) with seed 0 packs to 0, so this pins ``cell_keys`` to the reference
+    splitmix64 generator's first output from initial state 0: 0xE220A8397B1DCDAF. Our packing
+    XORs the seed in before mixing, so seed 0 changes nothing and this position's key is
+    exactly splitmix64's first call on state 0 -- the standard published test vector."""
+    k = cell_keys(0, 0, np.array([0]), seed=0)[0]
+    assert int(k) == 0xE220A8397B1DCDAF
+
+
 # ==============================================================================================
 # superset_mask
 # ==============================================================================================
@@ -115,6 +124,14 @@ def test_superset_mask_roughly_the_right_fraction() -> None:
     keys = cell_keys(np.zeros(200_000, dtype=np.int64), 0, np.arange(200_000))
     mask = superset_mask(keys, fraction=0.25)
     assert 0.23 < mask.mean() < 0.27
+
+
+def test_superset_mask_coerces_input_to_uint64() -> None:
+    """Ruling 13: a caller passing ``int64`` keys (not yet ``uint64``) must not silently get a
+    float-promoted, precision-losing comparison -- the input is coerced to ``uint64`` first."""
+    keys_i64 = np.array([0, 2**62, 2**63 - 1], dtype=np.int64)
+    keys_u64 = keys_i64.astype(np.uint64)
+    assert np.array_equal(superset_mask(keys_i64, fraction=0.25), superset_mask(keys_u64, 0.25))
 
 
 # ==============================================================================================
@@ -136,11 +153,13 @@ def test_halves_are_about_balanced() -> None:
     assert 0.45 < halves.mean() < 0.55
 
 
-def test_halves_unchanged_by_selection() -> None:
-    """A cell's half never changes because of which cells were selected around it -- selection
-    reads bit 0's threshold; half reads bit 1. Selecting a subset of rows and recomputing
-    half_of on just that subset gives the same values as the full computation, row for row."""
-    n = 5000
+def test_halves_are_balanced_among_selected_cells() -> None:
+    """A cell's half is bit 1 of its key; selection is governed by an ordering comparison over
+    the key's full value (in effect its high-order bits) against per-(line, plate) and
+    per-line rank cutoffs -- a different, independent bit. So halves among the cells
+    *selection actually keeps* should still land near 50/50, not skew because selection
+    happens to correlate with bit 1."""
+    n = 20_000
     keys = cell_keys(3, 1, np.arange(n))
     meta = pd.DataFrame(
         {
@@ -149,10 +168,14 @@ def test_halves_unchanged_by_selection() -> None:
             "key": keys,
         }
     )
-    full_halves = half_of(keys)
     plates_per_line = {"L1": 2, "L2": 2}
-    selected = select_cells(meta, plates_per_line, per_line=50)
-    assert np.array_equal(half_of(meta.loc[selected, "key"].to_numpy()), full_halves[selected])
+    selected = select_cells(meta, plates_per_line, per_line=200)
+    kept_halves = half_of(meta.loc[selected, "key"].to_numpy())
+    assert selected.sum() > 0
+    assert 0.45 < kept_halves.mean() < 0.55
+    # and recomputing half_of on just the selected keys matches slicing the full computation --
+    # a cell's half is a pure function of its own key, unaffected by which other cells were kept.
+    assert np.array_equal(kept_halves, half_of(keys)[selected])
 
 
 # ==============================================================================================
@@ -193,6 +216,36 @@ def test_select_cells_quota_and_cap_exact_with_uneven_plates() -> None:
     l1p1_keys = sorted(meta[(meta["line"] == "L1") & (meta["plate"] == "P1")]["key"])
     kept_l1p1_keys = sorted(kept[(kept["line"] == "L1") & (kept["plate"] == "P1")]["key"])
     assert kept_l1p1_keys == l1p1_keys[:4]
+
+
+def test_select_cells_per_line_cap_actually_bites() -> None:
+    """3 plates x 6 cells, per_line=10: the per-plate quota is ceil(10/3)=4, so the plate
+    stage alone keeps 12 cells (4 x 3) -- more than the 10-cell cap, so the line-level cap
+    must actually remove 2 of them (unlike the fixture above, where the cap was never
+    binding). Keys are assigned by plate in increasing blocks (plate A: 0-5, B: 6-11, C:
+    12-17), so the known answer is exact: the plate stage keeps {0,1,2,3}, {6,7,8,9},
+    {12,13,14,15}; the two largest of those twelve keys (14, 15 -- both plate C) are the ones
+    the cap must drop."""
+    rows: list[dict[str, object]] = []
+    for plate, start in (("A", 0), ("B", 6), ("C", 12)):
+        for offset in range(6):
+            rows.append({"line": "L1", "plate": plate, "key": np.uint64(start + offset)})
+    meta = pd.DataFrame(rows)
+
+    selected = select_cells(meta, {"L1": 3}, per_line=10)
+    kept = meta[selected]
+
+    assert kept.shape[0] == 10
+    assert set(kept["key"].tolist()) == {0, 1, 2, 3, 6, 7, 8, 9, 12, 13}
+    dropped = set(meta[~selected]["key"].tolist())
+    # the plate stage itself already excludes keys 4, 5, 10, 11, 16, 17 (each plate's two
+    # largest); the cap additionally drops exactly 14 and 15, the two largest cells that
+    # survived the plate stage.
+    assert {14, 15} <= dropped
+    counts = kept.groupby("plate").size()
+    assert counts.loc["A"] == 4
+    assert counts.loc["B"] == 4
+    assert counts.loc["C"] == 2  # the cap took both of C's cap-stage losers
 
 
 def test_select_cells_missing_line_in_plates_per_line_raises() -> None:
@@ -377,6 +430,62 @@ CROSSWALK = pd.DataFrame(
 )
 
 
+def _expected_dmso_cells() -> list[dict[str, object]]:
+    """Every DMSO cell the fixture shards actually contain, keyed by its real
+    (shard_index, row_group, row) position, with the raw-count vector it must scatter to and
+    the key ``cell_keys`` must produce for that exact position -- the ground truth
+    ``test_dmso_cells_end_to_end`` checks the pipeline's output against, position by position,
+    rather than assuming any particular row order survives selection."""
+    records: list[dict[str, object]] = []
+
+    def vec(entries: dict[int, float]) -> np.ndarray:
+        v = np.zeros(len(PANEL_SYMS), dtype=np.float32)
+        for token, value in entries.items():
+            v[TOKEN_TO_COL[token]] = value
+        return v
+
+    for i in range(3):  # shard 0, row group 0, rows 0-2: L1/P1
+        records.append(
+            dict(
+                shard_index=0,
+                row_group=0,
+                row=i,
+                cellosaurus="CVCL_L1",
+                plate="P1",
+                vec=vec({101: float(i + 1), 102: float(2 * i + 1)}),
+            )
+        )
+    for i in range(2):  # shard 1, row group 0, rows 0-1: L1/P2
+        records.append(
+            dict(
+                shard_index=1,
+                row_group=0,
+                row=i,
+                cellosaurus="CVCL_L1",
+                plate="P2",
+                vec=vec({102: float(i + 5), 103: float(i + 1)}),
+            )
+        )
+    for i in range(2):  # shard 1, row group 0, rows 2-3: L2/P1
+        records.append(
+            dict(
+                shard_index=1,
+                row_group=0,
+                row=2 + i,
+                cellosaurus="CVCL_L2",
+                plate="P1",
+                vec=vec({101: float(i + 10), 103: float(i + 1)}),
+            )
+        )
+    for record in records:
+        shard_index = cast(int, record["shard_index"])
+        row_group = cast(int, record["row_group"])
+        row = cast(int, record["row"])
+        key = cell_keys(shard_index, row_group, np.array([row]))[0]
+        record["key_hex"] = f"{int(key):016x}"
+    return records
+
+
 @pytest.mark.step_build
 def test_dmso_cells_end_to_end(tmp_path: Path) -> None:
     shard0, shard1 = _fixture_shards(tmp_path)
@@ -430,11 +539,26 @@ def test_dmso_cells_end_to_end(tmp_path: Path) -> None:
     assert list(l1.var_names) == PANEL_SYMS
     l1_x = cast(sparse.csr_matrix, l1.X)
     assert l1_x.dtype == np.float32
-    # first L1/P1 cell: genes [101,102] -> cols [0,1], values [1.0, 1.0] (i=0: i+1=1, 2*0+1=1)
-    row0 = np.asarray(l1_x[(l1.obs["plate"] == "P1").to_numpy()][0].todense()).ravel()
-    assert row0.tolist() == [1.0, 1.0, 0.0]
     assert all(len(k) == 16 for k in l1.obs["key"])  # 16-digit lowercase hex
     assert all(k == k.lower() for k in l1.obs["key"])
+
+    # Every selected cell's obs key equals the hex of cell_keys recomputed from that cell's
+    # real (shard_index, row_group, row) position (ruling 13) -- not merely well-formed, but
+    # exactly reproducible from position alone -- and its counts match what that exact cell's
+    # tokenized genes/expressions should scatter to (so scan_shard's vectorized take/CSR build
+    # is checked cell-by-cell, not just in aggregate).
+    expected_by_key = {r["key_hex"]: r for r in _expected_dmso_cells()}
+    for adata, _line in ((l1, "L1"), (l2, "L2")):
+        x = cast(sparse.csr_matrix, adata.X)
+        for row_i, (key_hex, cellosaurus, plate) in enumerate(
+            zip(adata.obs["key"], adata.obs["cellosaurus"], adata.obs["plate"], strict=True)
+        ):
+            assert key_hex in expected_by_key, f"key {key_hex} matches no fixture cell"
+            expected = expected_by_key[key_hex]
+            assert cellosaurus == expected["cellosaurus"]
+            assert plate == expected["plate"]
+            got = np.asarray(x[row_i].todense()).ravel()
+            np.testing.assert_array_equal(got, expected["vec"])
 
     # ---- expression tables ----
     expr = pd.read_parquet(cache / "expression.parquet")
@@ -475,6 +599,95 @@ def test_dmso_cells_end_to_end(tmp_path: Path) -> None:
 
 
 @pytest.mark.step_build
+def test_cell_selection_is_independent_of_shard_order(tmp_path: Path) -> None:
+    """Output bytes must not depend on how shards are split into blocks or the order they are
+    scanned in: one run puts both fixture shards into a single block (shard 0 then shard 1);
+    the other puts each shard in its own block, scanned in the opposite order (shard 1's block
+    written first). Both must select the identical cells and produce byte-identical
+    ``line_{i}.h5ad`` files and expression tables."""
+    grid_cellosaurus = {"CVCL_L1", "CVCL_L2"}
+
+    def _scan(shard_path: Path, shard_index: int):
+        with shard_path.open("rb") as fh:
+            return hc.scan_shard(
+                fh,
+                shard_index,
+                grid_cellosaurus,
+                TOKEN_TO_COL,
+                len(PANEL_SYMS),
+                seed=0,
+                fraction=1.0,
+            )
+
+    shard0, shard1 = _fixture_shards(tmp_path)
+
+    # Run A: one block (n_blocks=1), shards scanned and written in order 0, then 1.
+    meta0_a, counts0_a, all0_a = _scan(shard0, 0)
+    meta1_a, counts1_a, all1_a = _scan(shard1, 1)
+    cache_a = tmp_path / "cache_a"
+    hc.write_block_outputs(
+        cache_a / "dmso_0.parquet",
+        cache_a / "dmso_0.npz",
+        cache_a / "dmso_0_all.parquet",
+        [meta0_a, meta1_a],
+        [counts0_a, counts1_a],
+        [all0_a, all1_a],
+        len(PANEL_SYMS),
+    )
+    out_a = tmp_path / "out_a"
+    hc.combine(
+        GRID, CROSSWALK, PANEL_SYMS, cache_a, out_a, tmp_path / "tr_a", n_blocks=1, per_line=10
+    )
+
+    # Run B: two blocks (n_blocks=2), shard 1's block written before shard 0's -- shard_index
+    # still reflects each shard's real position (1 and 0 respectively), only the processing
+    # and block-file order are shuffled.
+    meta1_b, counts1_b, all1_b = _scan(shard1, 1)
+    meta0_b, counts0_b, all0_b = _scan(shard0, 0)
+    cache_b = tmp_path / "cache_b"
+    hc.write_block_outputs(
+        cache_b / "dmso_0.parquet",
+        cache_b / "dmso_0.npz",
+        cache_b / "dmso_0_all.parquet",
+        [meta1_b],
+        [counts1_b],
+        [all1_b],
+        len(PANEL_SYMS),
+    )
+    hc.write_block_outputs(
+        cache_b / "dmso_1.parquet",
+        cache_b / "dmso_1.npz",
+        cache_b / "dmso_1_all.parquet",
+        [meta0_b],
+        [counts0_b],
+        [all0_b],
+        len(PANEL_SYMS),
+    )
+    out_b = tmp_path / "out_b"
+    hc.combine(
+        GRID, CROSSWALK, PANEL_SYMS, cache_b, out_b, tmp_path / "tr_b", n_blocks=2, per_line=10
+    )
+
+    import anndata as ad
+
+    for i in range(len(GRID.lines)):
+        path_a = cache_a / "cells" / f"line_{i}.h5ad"
+        path_b = cache_b / "cells" / f"line_{i}.h5ad"
+        assert sha256_file(path_a) == sha256_file(path_b), f"line_{i}.h5ad differs by run order"
+        a = ad.read_h5ad(path_a)
+        b = ad.read_h5ad(path_b)
+        assert a.obs["key"].tolist() == b.obs["key"].tolist()
+
+    expr_a = pd.read_parquet(cache_a / "expression.parquet")
+    expr_b = pd.read_parquet(cache_b / "expression.parquet")
+    pd.testing.assert_frame_equal(expr_a, expr_b)
+
+    halves_a = pd.read_parquet(cache_a / "expression_halves.parquet")
+    halves_b = pd.read_parquet(cache_b / "expression_halves.parquet")
+    pd.testing.assert_frame_equal(halves_a, halves_b)
+
+
+@pytest.mark.step_build
 def test_combine_refuses_unless_all_blocks_done(tmp_path: Path) -> None:
     cache = tmp_path / "cache"
     cache.mkdir()
@@ -485,25 +698,26 @@ def test_combine_refuses_unless_all_blocks_done(tmp_path: Path) -> None:
         )
 
 
-@pytest.mark.step_build
-def test_combine_fails_on_quota_shortfall(tmp_path: Path) -> None:
-    """A (line, plate) whose superset undercounts its quota, while the full scan shows more
-    cells were available, must fail rather than silently under-filling."""
-    # L1 has 1 plate; quota == cap == 5. The superset (what scan_shard kept) has only 2 rows,
-    # but the full scan (all_counts) says 10 cells were seen on that plate -- a shortfall.
+def _quota_shortfall_case(tmp_path: Path, n_superset: int, n_full: int, per_line: int) -> None:
+    """A single line, single plate (so quota == per_line): ``n_superset`` cells with unique
+    keys were kept by the superset filter, while the full (unfiltered) scan of that
+    (line, plate) actually saw ``n_full`` DMSO cells. Runs ``combine`` -- raises ``SystemExit``
+    if and only if the guard fires."""
     meta = pd.DataFrame(
         {
-            "shard_index": [0, 0],
-            "row_group": [0, 0],
-            "row": [0, 1],
-            "key": np.array([1, 2], dtype=np.uint64),
-            "cellosaurus": ["CVCL_L1", "CVCL_L1"],
-            "plate": ["P1", "P1"],
-            "sample": ["s0", "s1"],
+            "shard_index": [0] * n_superset,
+            "row_group": [0] * n_superset,
+            "row": list(range(n_superset)),
+            "key": np.arange(1, n_superset + 1, dtype=np.uint64),
+            "cellosaurus": ["CVCL_L1"] * n_superset,
+            "plate": ["P1"] * n_superset,
+            "sample": [f"s{i}" for i in range(n_superset)],
         }
     )
-    counts = sparse.csr_matrix((2, len(PANEL_SYMS)), dtype=np.float32)
-    all_counts = pd.DataFrame({"cellosaurus": ["CVCL_L1"], "plate": ["P1"], "n_dmso_seen": [10]})
+    counts = sparse.csr_matrix((n_superset, len(PANEL_SYMS)), dtype=np.float32)
+    all_counts = pd.DataFrame(
+        {"cellosaurus": ["CVCL_L1"], "plate": ["P1"], "n_dmso_seen": [n_full]}
+    )
 
     cache = tmp_path / "cache"
     hc.write_block_outputs(
@@ -518,7 +732,34 @@ def test_combine_fails_on_quota_shortfall(tmp_path: Path) -> None:
     out_dir = tmp_path / "out"
     grid = Grid(lines=("L1",), drugs=(), metadata_name={}, excluded_pairs=())
     crosswalk = pd.DataFrame({"line": ["L1"], "cellosaurus": ["CVCL_L1"], "cell_name": ["N1"]})
+    hc.combine(
+        grid, crosswalk, PANEL_SYMS, cache, out_dir, tmp_path / "tr", n_blocks=1, per_line=per_line
+    )
+
+
+@pytest.mark.step_build
+def test_quota_shortfall_fails_at_equality_n_full_equals_quota(tmp_path: Path) -> None:
+    """n_full == quota (5), superset short (3): the guard is ``n_superset < min(quota,
+    n_full)``, and at equality ``min(5, 5) == 5``, so 3 < 5 must still fail -- the old
+    ``n_full > quota`` (strict) guard would have missed this exactly-at-equality case."""
     with pytest.raises(SystemExit, match="quota"):
-        hc.combine(
-            grid, crosswalk, PANEL_SYMS, cache, out_dir, tmp_path / "tr", n_blocks=1, per_line=5
-        )
+        _quota_shortfall_case(tmp_path, n_superset=3, n_full=5, per_line=5)
+
+
+@pytest.mark.step_build
+def test_quota_shortfall_fails_when_full_scan_below_quota_but_above_superset(
+    tmp_path: Path,
+) -> None:
+    """n_superset (3) < n_full (5) < quota (10): the full scan never had enough cells to hit
+    quota, but it had more than the superset kept, so the superset still undercounted what was
+    actually there. The old ``n_full > quota`` guard would have passed this silently (n_full=5
+    is not > quota=10), even though the superset shorted a real, recoverable shortfall."""
+    with pytest.raises(SystemExit, match="quota"):
+        _quota_shortfall_case(tmp_path, n_superset=3, n_full=5, per_line=10)
+
+
+@pytest.mark.step_build
+def test_quota_shortfall_passes_at_min_quota_full(tmp_path: Path) -> None:
+    """n_superset (5) == min(quota, n_full) == min(5, 10): the superset reproduces the
+    full-data selection exactly, so this must NOT raise."""
+    _quota_shortfall_case(tmp_path, n_superset=5, n_full=10, per_line=5)

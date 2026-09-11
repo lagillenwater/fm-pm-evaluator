@@ -33,7 +33,9 @@ license CC0-1.0. Paper: Zhang et al., *Tahoe-100M: A Giga-Scale Single-Cell Pert
 for Context-Dependent Gene Function and Cellular Modeling*, bioRxiv 2025,
 [10.1101/2025.02.20.639398](https://doi.org/10.1101/2025.02.20.639398).
 
-**What this project reads.** Not the 100M raw cells but two derived configurations:
+**What this project reads.** Two derived, pre-aggregated configurations for the delta rungs
+below (rung 1 also reads individual cells from a third configuration, `expression_data` —
+see "Tahoe-100M DMSO cells (rung 1)" further down):
 
 - `pseudobulk_differential_expression` — the table every delta rung is built on. ~4.1 billion
   rows (89 GB, 1,026 parquet shards): one row per (cell line, drug, dose, plate) per gene,
@@ -116,6 +118,9 @@ this one.
 
 ## Tahoe-100M DMSO cells (rung 1)
 
+**Written.** 2026-09-11 (`src/fmharness/heldout/cells.py`, `scripts/heldout_dmso_cells.py`); the
+date a run actually pulled this data is recorded when it registers the tranche below.
+
 **What it is.** Rung 1 describes each of its 50 cell lines from cells that saw no drug — only
 the solvent used to carry a drug into a well, dimethyl sulfoxide (DMSO), recorded in Tahoe-100M
 as the drug value `DMSO_TF`. This is a different read of the atlas from the
@@ -137,19 +142,25 @@ picked deterministically rather than by streaming order:
 1. Every DMSO cell of a grid line gets a 64-bit key from `splitmix64` of its shard position
    (shard index, row group, row) mixed with a fixed seed (0) — the same cell gets the same key
    no matter what order the 3,388 shards happen to be scanned in.
-2. A cheap first filter keeps a 25% *superset* of those keys (below a fixed threshold), so the
-   expensive part of the read — decoding each cell's full gene-expression list — only ever runs
-   on a bounded quarter of the DMSO cells, not the whole corpus.
+2. A cheap first filter keeps a 25% *superset* of those keys (below a fixed threshold). A
+   parquet file is decoded a whole row group at a time, not cell by cell, so the saving is at
+   that granularity: a row group with no DMSO cell of a grid line in the superset is skipped
+   entirely (its gene-expression columns are never decoded), and a row group that does have one
+   has its whole gene-expression columns decoded, after which only the superset's cells are
+   kept from that decode.
 3. Within that superset, each line's per-plate quota is `ceil(1,000 / plates for that line)`; the
    quota's smallest keys are kept per (line, plate) — a plate with fewer cells than its quota
    simply gives all of them. Those kept cells are then capped at the smallest 1,000 keys per
    line.
-4. Each selected cell's key also gives it a split-half label (bit 1 of the key, independent of
-   the bit the superset filter reads), used to check how reliable a line description is by
+4. Each selected cell's key also gives it a split-half label (bit 1 of the key; the superset
+   filter instead compares the key's full value, effectively its high-order bits, against a
+   threshold, so the two are independent), used to check how reliable a line description is by
    comparing its two halves.
 
-Cells are read over the Stack gene panel (15,012 genes, matched to Tahoe's gene metadata
-case-insensitively) as raw counts, since Stack expects raw counts in per-line groups.
+Cells are read over the Stack gene panel (15,012 genes; any panel gene absent from Tahoe's own
+gene table is dropped, so a line's cells may cover somewhat fewer than 15,012 columns — the
+combine step logs how many of the panel matched) as raw counts, since Stack expects raw counts
+in per-line groups.
 
 **Scripts.** `src/fmharness/heldout/cells.py` (the selection math: cell keys, the superset
 filter, plate-balanced selection, the split-half label, and pseudobulk log2(counts per million +

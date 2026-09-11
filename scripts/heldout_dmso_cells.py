@@ -18,9 +18,11 @@ Three modes:
   (cellosaurus, plate) -- not just the superset) into ``--cache``.
 * ``--combine``: refuses (non-zero exit, naming them) unless every block's three outputs are
   done. Sums the all-DMSO counts to get each line's plate count, selects cells, assigns
-  halves, and fails if any (line, plate) superset holds fewer cells than its quota while the
-  full count holds more (a sampling shortfall the fixed 25%% superset should not have
-  produced). Writes ``cells/line_{i}.h5ad`` per grid line, ``expression.parquet``,
+  halves, and fails if any (line, plate) superset holds fewer cells than
+  ``min(quota, cells actually seen for that (line, plate) in the full scan)`` -- the superset
+  reproduces the full-data selection exactly when, and only when, that holds (a sampling
+  shortfall the fixed 25%% superset should not have produced). Writes ``cells/line_{i}.h5ad``
+  per grid line, ``expression.parquet``,
   ``expression_halves.parquet`` into ``--cache``, ``rung1_cells.csv`` into ``--out-dir``,
   and registers the 50 per-line files as tranche ``tahoe100m-dmso-cells.v1`` under
   ``--tranche-dir`` (default ``data/tranches``).
@@ -61,6 +63,8 @@ from typing import IO, Any, cast
 
 import numpy as np
 import pandas as pd
+import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from scipy import sparse
 
@@ -78,13 +82,41 @@ from fmharness.heldout.cells import (  # noqa: E402
 from fmharness.heldout.grid import Grid, load_grid  # noqa: E402
 from fmharness.heldout.records import is_done, sha256_file, write_record  # noqa: E402
 from fmharness.schema import Tranche  # noqa: E402
-from fmharness.tahoe import scatter_tokens  # noqa: E402
 
 TAHOE = "tahoebio/Tahoe-100M"
 TAHOE_REVISION = "2dc57900b7981cfcf5e211527169a0b006546a95"
 TRANCHE_ID = "tahoe100m-dmso-cells.v1"
 GENE_PANEL_SIZE = 15012
 META_COLS = ("drug", "cell_line_id", "plate", "sample")
+META_COLUMNS = ("shard_index", "row_group", "row", "key", "cellosaurus", "plate", "sample")
+
+
+def _empty_meta_frame() -> pd.DataFrame:
+    """An empty ``meta`` frame with the same dtypes a non-empty one gets -- in particular
+    ``key`` as ``uint64`` throughout, never ``int64``/``object``/``float64`` (ruling 13):
+    concatenating a real block's ``uint64`` key column with a placeholder of a different
+    dtype would silently upcast the whole column, corrupting every key in it."""
+    return pd.DataFrame(
+        {
+            "shard_index": pd.array([], dtype="int64"),
+            "row_group": pd.array([], dtype="int64"),
+            "row": pd.array([], dtype="int64"),
+            "key": pd.array([], dtype="uint64"),
+            "cellosaurus": pd.array([], dtype="object"),
+            "plate": pd.array([], dtype="object"),
+            "sample": pd.array([], dtype="object"),
+        }
+    )
+
+
+def _empty_all_counts_frame() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "cellosaurus": pd.array([], dtype="object"),
+            "plate": pd.array([], dtype="object"),
+            "n_dmso_seen": pd.array([], dtype="int64"),
+        }
+    )
 
 
 # --------------------------------------------------------------------------------------------
@@ -164,25 +196,28 @@ def scan_shard(
     seed: int = 0,
     fraction: float = 0.25,
 ) -> tuple[pd.DataFrame, sparse.csr_matrix, pd.DataFrame]:
-    """Scan one shard's row groups, decoding ``genes``/``expressions`` only for DMSO cells of
-    ``grid_cellosaurus`` whose key falls in the superset.
+    """Scan one shard's row groups, keeping DMSO cells of ``grid_cellosaurus`` whose key falls
+    in the superset.
 
-    Small metadata columns are read per row group first; the heavy tokenized arrays are
-    decoded (and copied out of the row-group buffer, so it does not stay pinned in memory)
-    only for the rows kept. Returns:
+    Small metadata columns are read per row group first, and a row group with no such cell is
+    skipped without ever touching its ``genes``/``expressions`` columns. A row group that does
+    have one has those columns decoded whole (parquet decodes a row group at a time, not cell
+    by cell), then only the kept rows are taken out of that decode -- via one
+    ``pyarrow.compute.take`` over the row group's list columns, not a per-cell Python loop --
+    and copied so nothing keeps the row-group buffer pinned in memory. Returns:
 
     * ``meta`` -- one row per kept cell: ``shard_index, row_group, row, key, cellosaurus,
-      plate, sample``.
+      plate, sample`` (``key`` always ``uint64``, ruling 13).
     * ``counts`` -- those cells' raw counts over the panel, a CSR aligned with ``meta``'s rows.
     * ``all_counts`` -- one row per (cellosaurus, plate) with ``n_dmso_seen``, counting every
       DMSO cell of a grid line seen in this shard (not just the ones the superset kept) --
       the input ``select_cells`` needs to size each line's per-plate quota.
     """
     pfile = pq.ParquetFile(fileobj)
-    meta_rows: list[tuple[int, int, int, int, str, str, str]] = []
-    g_acc: list[np.ndarray] = []
-    e_acc: list[np.ndarray] = []
-    all_counter: dict[tuple[str, str], int] = {}
+    meta_blocks: list[pd.DataFrame] = []
+    counts_blocks: list[sparse.csr_matrix] = []
+    all_counts_blocks: list[pd.DataFrame] = []
+    grid_array = np.array(sorted(grid_cellosaurus), dtype=object)
 
     for rg in range(pfile.num_row_groups):
         table = pfile.read_row_group(rg, columns=list(META_COLS))
@@ -192,16 +227,13 @@ def scan_shard(
         sample = np.asarray(table.column("sample").to_pylist(), dtype=object)
 
         is_dmso = drug == DMSO_DRUG
-        is_grid = np.isin(cl, np.array(sorted(grid_cellosaurus), dtype=object))
+        is_grid = np.isin(cl, grid_array)
         dmso_grid = is_dmso & is_grid
         if not dmso_grid.any():
             continue
 
         seen = pd.DataFrame({"cellosaurus": cl[dmso_grid], "plate": plate[dmso_grid]})
-        value_counts = cast(Any, seen.value_counts())
-        for (cellosaurus_v, plate_v), n_v in value_counts.items():
-            counter_key = (str(cellosaurus_v), str(plate_v))
-            all_counter[counter_key] = all_counter.get(counter_key, 0) + int(n_v)
+        all_counts_blocks.append(seen.value_counts().rename("n_dmso_seen").reset_index())
 
         rows_idx = np.nonzero(dmso_grid)[0]
         keys = cell_keys(shard_index, rg, rows_idx, seed)
@@ -209,30 +241,65 @@ def scan_shard(
         if not kept.any():
             continue
         keep_rows = rows_idx[kept]
-        keep_keys = keys[kept]
+        keep_keys = keys[kept].astype(np.uint64)
 
-        arrs = pfile.read_row_group(rg, columns=["genes", "expressions"])
-        g_col, e_col = arrs.column("genes"), arrs.column("expressions")
-        for i, k in zip(keep_rows.tolist(), keep_keys.tolist(), strict=True):
-            # .copy(): a zero-copy view would pin the whole row-group buffer alive.
-            g_acc.append(g_col[i].values.to_numpy(zero_copy_only=False).copy())
-            e_acc.append(e_col[i].values.to_numpy(zero_copy_only=False).copy())
-            meta_rows.append(
-                (shard_index, rg, int(i), int(k), str(cl[i]), str(plate[i]), str(sample[i]))
+        meta_blocks.append(
+            pd.DataFrame(
+                {
+                    "shard_index": np.int64(shard_index),
+                    "row_group": np.int64(rg),
+                    "row": keep_rows.astype(np.int64),
+                    "key": keep_keys,
+                    "cellosaurus": cl[keep_rows],
+                    "plate": plate[keep_rows],
+                    "sample": sample[keep_rows],
+                }
             )
+        )
 
-    meta = pd.DataFrame(
-        meta_rows,
-        columns=["shard_index", "row_group", "row", "key", "cellosaurus", "plate", "sample"],
+        # Decoding is at row-group granularity (parquet's own read unit): this reads every
+        # cell's genes/expressions in the row group, then `pc.take` pulls out only the kept
+        # rows in one vectorized operation -- no per-cell Python loop.
+        arrs = pfile.read_row_group(rg, columns=["genes", "expressions"])
+        take_idx = pa.array(keep_rows.astype(np.int64))
+        genes_taken = pc.take(arrs.column("genes"), take_idx).combine_chunks()
+        expr_taken = pc.take(arrs.column("expressions"), take_idx).combine_chunks()
+        # .copy(): a taken/flattened array still backs onto the row-group's own allocation.
+        gene_values = genes_taken.values.to_numpy(zero_copy_only=False).copy()
+        gene_offsets = genes_taken.offsets.to_numpy(zero_copy_only=False)
+        expr_values = expr_taken.values.to_numpy(zero_copy_only=False).copy()
+
+        lengths = np.diff(gene_offsets)
+        rows_rel = np.repeat(np.arange(keep_rows.size), lengths)
+        cols = pd.Series(gene_values).map(token_to_col)
+        keep_tok = cols.notna().to_numpy()
+        cols_arr = cols.to_numpy()
+        coo = sparse.coo_matrix(
+            (
+                expr_values[keep_tok].astype(np.float32),
+                (rows_rel[keep_tok], cols_arr[keep_tok].astype(np.int64)),
+            ),
+            shape=(keep_rows.size, n_cols),
+            dtype=np.float32,
+        )
+        counts_blocks.append(cast(sparse.csr_matrix, coo.tocsr()))
+
+    meta = pd.concat(meta_blocks, ignore_index=True) if meta_blocks else _empty_meta_frame()
+    counts = cast(
+        sparse.csr_matrix,
+        sparse.vstack(counts_blocks).tocsr()
+        if counts_blocks
+        else sparse.csr_matrix((0, n_cols), dtype=np.float32),
     )
-    counts = (
-        scatter_tokens(g_acc, e_acc, token_to_col, n_cols)
-        if g_acc
-        else sparse.csr_matrix((0, n_cols), dtype=np.float32)
-    )
-    all_counts = pd.DataFrame(
-        [(c, p, n) for (c, p), n in sorted(all_counter.items())],
-        columns=["cellosaurus", "plate", "n_dmso_seen"],
+    all_counts = (
+        cast(
+            pd.DataFrame,
+            pd.concat(all_counts_blocks, ignore_index=True)
+            .groupby(["cellosaurus", "plate"], as_index=False)["n_dmso_seen"]
+            .sum(),
+        )
+        if all_counts_blocks
+        else _empty_all_counts_frame()
     )
     return meta, counts, all_counts
 
@@ -303,16 +370,12 @@ def write_block_outputs(
 ) -> None:
     """Concatenate one block's per-shard results and write its three completion-recorded
     outputs. Split out from ``run_block`` so tests can drive it without Hugging Face."""
-    meta_cols = ["shard_index", "row_group", "row", "key", "cellosaurus", "plate", "sample"]
-    combined_meta = (
-        pd.concat(metas, ignore_index=True) if metas else pd.DataFrame(columns=meta_cols)
-    )
+    combined_meta = pd.concat(metas, ignore_index=True) if metas else _empty_meta_frame()
     combined_counts = (
         sparse.vstack(counts_list).tocsr()
         if counts_list
         else sparse.csr_matrix((0, n_cols), dtype=np.float32)
     )
-    all_cols = ["cellosaurus", "plate", "n_dmso_seen"]
     combined_all: pd.DataFrame = (
         cast(
             pd.DataFrame,
@@ -321,7 +384,7 @@ def write_block_outputs(
             .sum(),
         )
         if all_list
-        else pd.DataFrame(columns=all_cols)
+        else _empty_all_counts_frame()
     )
 
     meta_path.parent.mkdir(parents=True, exist_ok=True)
@@ -401,6 +464,14 @@ def _combined_block_frames(
         .groupby(["cellosaurus", "plate"], as_index=False)["n_dmso_seen"]
         .sum(),
     )
+
+    # Sort by key (unique across all cells) before anything downstream reads row order, so
+    # every output -- selection, the h5ad row order, pseudobulk -- is independent of how many
+    # blocks the scan ran in or what order its shards were read in (ruling: byte-identical
+    # outputs regardless of --n-blocks).
+    order = np.argsort(meta["key"].to_numpy(dtype=np.uint64), kind="stable")
+    meta = meta.iloc[order].reset_index(drop=True)
+    counts = counts[order]
     return meta, counts, all_counts
 
 
@@ -445,15 +516,18 @@ def combine(
     joined["n_superset"] = joined["n_superset"].fillna(0).astype(int)
     joined["n_full"] = joined["n_full"].fillna(0).astype(int)
     joined["quota"] = joined["line"].map(quota_by_line.get)
-    under_quota = joined["n_superset"] < joined["quota"]
-    full_beats_quota = joined["n_full"] > joined["quota"]
-    shortfall = cast(pd.DataFrame, joined[under_quota & full_beats_quota])
+    # The superset reproduces the full-data selection for a (line, plate) exactly when it
+    # holds at least min(quota, n_full) cells -- a plate with fewer than its quota available
+    # in the FULL scan can only ever give what it has (no shortfall), but the superset must
+    # never come up short of what the full scan shows was actually there, up to the quota.
+    required = np.minimum(joined["quota"].to_numpy(), joined["n_full"].to_numpy())
+    shortfall = cast(pd.DataFrame, joined[joined["n_superset"].to_numpy() < required])
     if not shortfall.empty:
         names = [f"{r.line}/{r.plate}" for r in cast(Any, shortfall.itertuples())]
         raise SystemExit(
-            f"superset undercounts {len(names)} (line, plate) pair(s) relative to their quota "
-            f"while the full scan holds more (the 25% superset should not have missed "
-            f"quota here): {names}"
+            f"superset undercounts {len(names)} (line, plate) pair(s) below "
+            f"min(quota, full scan count) -- the 25% superset should not have missed cells "
+            f"the full scan shows were actually there: {names}"
         )
 
     meta = meta.assign(

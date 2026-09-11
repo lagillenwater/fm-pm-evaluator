@@ -91,12 +91,14 @@ def superset_mask(keys: np.ndarray, fraction: float = 0.25) -> np.ndarray:
     """
     threshold = min(math.floor(fraction * (2**64)), 2**64 - 1)
     threshold_u64 = np.uint64(threshold)
-    return keys < threshold_u64
+    keys_u64 = np.asarray(keys, dtype=np.uint64)
+    return keys_u64 < threshold_u64
 
 
 def half_of(keys: np.ndarray) -> np.ndarray:
-    """Bit 1 of each key as ``int8`` (0 or 1). Independent of ``superset_mask``, which reads
-    only bit 0's side of the threshold comparison -- so halves do not depend on the fraction
+    """Bit 1 of each key as ``int8`` (0 or 1). Independent of ``superset_mask``, which compares
+    a key's full value (in effect, its high-order bits) against a threshold -- an ordering
+    comparison, not a test of any single low bit -- so halves do not depend on the fraction
     used to build the superset, or on which cells were later selected out of it."""
     bit = (np.asarray(keys, dtype=np.uint64) >> np.uint64(1)) & np.uint64(1)
     return bit.astype(np.int8)
