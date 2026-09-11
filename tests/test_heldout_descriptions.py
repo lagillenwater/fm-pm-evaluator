@@ -32,6 +32,7 @@ from fmharness.heldout.cells import pseudobulk_log_cpm
 from fmharness.heldout.chemistry import morgan_fingerprints, tanimoto
 from fmharness.heldout.descriptions import (
     RANDOM_SEEDS,
+    group_means,
     identity_match,
     linear_kernel,
     nmf_components,
@@ -39,6 +40,7 @@ from fmharness.heldout.descriptions import (
     pca_components,
     pca_project,
     random_stand_in,
+    shuffled_identity_correlations,
     shuffled_identity_null,
     standardize,
     standardize_apply,
@@ -198,6 +200,63 @@ def test_identity_match_is_the_share_of_own_best_match() -> None:
     # only line 2 still finds itself -- the share should read exactly 1/3.
     swapped = half_b[[1, 0, 2]]
     assert identity_match(half_a, swapped) == pytest.approx(1.0 / 3.0)
+
+
+# ==============================================================================================
+# group_means (task 6's aggregator for Stack embeddings)
+# ==============================================================================================
+
+
+def test_group_means_hand_computed_with_tuple_groups() -> None:
+    values = np.array([[1.0, 10.0], [3.0, 30.0], [2.0, 20.0]])
+    groups = [("A", 0), ("A", 0), ("B", 1)]
+    labels, means = group_means(values, groups)
+    # Sorted distinct tuple groups: ("A", 0) before ("B", 1).
+    assert [tuple(x) for x in labels] == [("A", 0), ("B", 1)]
+    np.testing.assert_allclose(means, [[2.0, 20.0], [2.0, 20.0]])
+
+
+def test_group_means_matches_manual_group_average_for_scalar_groups() -> None:
+    rng = np.random.default_rng(9)
+    values = rng.normal(size=(9, 3))
+    groups = np.array(["x", "y", "x", "z", "y", "x", "z", "z", "y"])
+    labels, means = group_means(values, groups)
+    assert list(labels) == ["x", "y", "z"]
+    for label in ("x", "y", "z"):
+        expected = values[groups == label].mean(axis=0)
+        np.testing.assert_allclose(means[list(labels).index(label)], expected)
+
+
+# ==============================================================================================
+# shuffled_identity_null / shuffled_identity_correlations: the default ``aggregate`` is
+# bit-identical to the pre-refactor behaviour (pseudobulk log2(CPM+1) unconditionally).
+# ==============================================================================================
+
+
+def test_shuffled_identity_null_default_aggregate_is_bit_identical_to_explicit_pseudobulk() -> None:
+    counts, lines_arr, halves = _synthetic_dmso_cells(
+        n_lines=10, n_genes=6, cells_per_line=20, seed=42
+    )
+
+    def describe(x: np.ndarray) -> np.ndarray:
+        return x
+
+    default_null = shuffled_identity_null(
+        counts, lines_arr, halves, describe, n_shuffles=10, seed=7
+    )
+    explicit_null = shuffled_identity_null(
+        counts, lines_arr, halves, describe, n_shuffles=10, seed=7, aggregate=pseudobulk_log_cpm
+    )
+    np.testing.assert_array_equal(default_null, explicit_null)
+
+    default_categories, default_corr = shuffled_identity_correlations(
+        counts, lines_arr, halves, describe, seed=7
+    )
+    explicit_categories, explicit_corr = shuffled_identity_correlations(
+        counts, lines_arr, halves, describe, seed=7, aggregate=pseudobulk_log_cpm
+    )
+    assert default_categories == explicit_categories
+    np.testing.assert_array_equal(default_corr, explicit_corr)
 
 
 # ==============================================================================================

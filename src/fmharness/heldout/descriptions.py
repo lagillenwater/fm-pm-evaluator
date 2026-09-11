@@ -17,6 +17,10 @@ description, drawn once with a fixed seed. This module holds the pure, testable 
   description built from half a line's cells should best match that line's other half.
 * ``shuffled_identity_null`` -- the same control's negative: with cells' line labels
   shuffled, matches should fall to chance.
+* ``group_means`` -- per-group means of a dense matrix (e.g. Stack cell embeddings), the
+  averaging analogue of ``pseudobulk_log_cpm`` -- an alternative ``aggregate`` for the
+  shuffled-identity controls above, which task 6 (Stack embeddings) reuses so its own
+  half-versus-half identity control does not copy the shuffle loop.
 
 ``scripts/heldout_descriptions.py`` is the only thing that calls these in anger; this module
 is pure numpy/scipy/sklearn so it can be exercised without any cache on disk.
@@ -194,42 +198,86 @@ def identity_match(half_a: np.ndarray, half_b: np.ndarray) -> float:
     return float(np.mean(best == np.arange(corr.shape[0])))
 
 
+#: The type every ``aggregate`` callable below must satisfy: values for a subset of rows plus
+#: that subset's group labels, in -> (sorted distinct labels, one aggregated row per label).
+Aggregate = Callable[[Any, np.ndarray], tuple[np.ndarray, np.ndarray]]
+
+
+def group_means(
+    values: np.ndarray, groups: Sequence[Any] | np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Sorted group labels and per-group means of ``values`` (a dense ``N x D`` matrix).
+
+    The averaging analogue of ``pseudobulk_log_cpm``: built the same vectorized way (a one-hot
+    indicator matrix times ``values``, via one sparse matrix product -- no per-group loop), but
+    a plain mean rather than a sum rescaled to log2(CPM + 1). Used to describe a group of Stack
+    cell embeddings, which (unlike raw counts) already live on a scale a mean is meaningful on.
+    ``groups`` may hold tuples (e.g. (line, half) pairs); each is boxed into an ``object``
+    array element-by-element first, exactly as ``pseudobulk_log_cpm`` does, so ``factorize``
+    never collapses same-length tuples into a 2-D array.
+    """
+    groups_seq = list(groups)
+    groups_arr = np.empty(len(groups_seq), dtype=object)
+    for i, v in enumerate(groups_seq):
+        groups_arr[i] = v
+    codes, labels = pd.factorize(groups_arr, sort=True)
+    n_groups = len(labels)
+    values_arr = np.asarray(values, dtype=np.float64)
+    n_rows = values_arr.shape[0]
+    indicator = sparse.csr_matrix(
+        (np.ones(n_rows, dtype=np.float64), (codes, np.arange(n_rows))),
+        shape=(n_groups, n_rows),
+    )
+    sums = np.asarray(cast(Any, indicator) @ values_arr)
+    counts_per_group = np.asarray(indicator.sum(axis=1)).reshape(-1, 1)
+    means = sums / counts_per_group
+    return np.asarray(labels), means
+
+
 def _shuffled_halves(
-    counts: sparse.csr_matrix,
+    values: sparse.csr_matrix | np.ndarray,
     lines_arr: np.ndarray,
     halves_arr: np.ndarray,
     categories: list[Any],
     shuffled_lines: np.ndarray,
+    aggregate: Aggregate = pseudobulk_log_cpm,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Pseudobulk log2(CPM+1), per (shuffled line, half), reindexed onto the FULL fixed
+    """``aggregate`` applied per (shuffled line, half), reindexed onto the FULL fixed
     ``categories`` list (vectorized via ``DataFrame.reindex``, no per-category loop) -- a line
     a shuffle happened to leave with no cells in a half gets an all-zero row rather than being
-    dropped, so both halves' matrices always share the same shape and row order."""
+    dropped, so both halves' matrices always share the same shape and row order.
+
+    ``aggregate`` defaults to ``pseudobulk_log_cpm``, so every existing caller (expression,
+    PCA, NMF) is unchanged; task 6 passes ``group_means`` to aggregate Stack embeddings
+    instead.
+    """
     mats: list[np.ndarray] = []
     for half in (0, 1):
         mask = halves_arr == half
-        labels, pseudobulk = pseudobulk_log_cpm(counts[mask], shuffled_lines[mask])
-        frame = pd.DataFrame(pseudobulk, index=pd.Index(labels)).reindex(categories, fill_value=0.0)
+        labels, aggregated = aggregate(values[mask], shuffled_lines[mask])
+        frame = pd.DataFrame(aggregated, index=pd.Index(labels)).reindex(categories, fill_value=0.0)
         mats.append(frame.to_numpy(dtype=np.float64))
     return mats[0], mats[1]
 
 
 def shuffled_identity_null(
-    counts: sparse.csr_matrix,
+    counts: sparse.csr_matrix | np.ndarray,
     lines: Sequence[Any] | np.ndarray,
     halves: Sequence[int] | np.ndarray,
     describe: Callable[[np.ndarray], np.ndarray],
     n_shuffles: int,
     seed: int,
+    aggregate: Aggregate = pseudobulk_log_cpm,
 ) -> np.ndarray:
     """Identity match under ``n_shuffles`` permutations of the cells' line labels.
 
     Each shuffle draws one permutation (seeded ``np.random.default_rng(seed)``), reassigns
     every cell's line label according to it (halves stay fixed to their real cells),
-    pseudobulks log2(CPM+1) per (shuffled line, half) into two ``L x G`` matrices over the
-    FULL fixed set of lines, applies ``describe`` to each, and returns ``identity_match`` per
-    shuffle. Vectorized within a shuffle (sparse group sums via ``pseudobulk_log_cpm``); the
-    loop is over shuffles only.
+    aggregates ``counts`` per (shuffled line, half) into two ``L x G`` matrices over the FULL
+    fixed set of lines via ``aggregate`` (default: pseudobulk log2(CPM+1) -- unchanged
+    behaviour for every existing caller; task 6 passes ``group_means`` for Stack embeddings),
+    applies ``describe`` to each, and returns ``identity_match`` per shuffle. Vectorized within
+    a shuffle (sparse group sums via ``aggregate``); the loop is over shuffles only.
     """
     lines_arr = np.asarray(lines)
     halves_arr = np.asarray(halves)
@@ -239,34 +287,39 @@ def shuffled_identity_null(
     n_cells = lines_arr.shape[0]
     for s in range(n_shuffles):
         shuffled_lines = lines_arr[rng.permutation(n_cells)]
-        a, b = _shuffled_halves(counts, lines_arr, halves_arr, categories, shuffled_lines)
+        a, b = _shuffled_halves(
+            counts, lines_arr, halves_arr, categories, shuffled_lines, aggregate
+        )
         out[s] = identity_match(describe(a), describe(b))
     return out
 
 
 def shuffled_identity_correlations(
-    counts: sparse.csr_matrix,
+    counts: sparse.csr_matrix | np.ndarray,
     lines: Sequence[Any] | np.ndarray,
     halves: Sequence[int] | np.ndarray,
     describe: Callable[[np.ndarray], np.ndarray],
     seed: int,
+    aggregate: Aggregate = pseudobulk_log_cpm,
 ) -> tuple[list[Any], np.ndarray]:
     """The identity-correlation grid for exactly the FIRST shuffle ``shuffled_identity_null``
     would draw with the same ``seed`` -- the negative-control grid for the build figure.
-    Returns ``(categories, corr)`` in the same fixed line order the null uses."""
+    Returns ``(categories, corr)`` in the same fixed line order the null uses. ``aggregate``
+    has the same meaning as in ``shuffled_identity_null``."""
     lines_arr = np.asarray(lines)
     halves_arr = np.asarray(halves)
     categories = sorted(set(lines_arr.tolist()))
     rng = np.random.default_rng(seed)
     n_cells = lines_arr.shape[0]
     shuffled_lines = lines_arr[rng.permutation(n_cells)]
-    a, b = _shuffled_halves(counts, lines_arr, halves_arr, categories, shuffled_lines)
+    a, b = _shuffled_halves(counts, lines_arr, halves_arr, categories, shuffled_lines, aggregate)
     return categories, identity_correlations(describe(a), describe(b))
 
 
 __all__ = [
     "NMF_SEED",
     "RANDOM_SEEDS",
+    "group_means",
     "identity_correlations",
     "identity_match",
     "linear_kernel",
