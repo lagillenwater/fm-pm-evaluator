@@ -45,7 +45,9 @@ FRAME_SCHEMA = "v3-dose-fixed-alternating"
 #: assigned alternately -- first to half 0, second to half 1, third to half 0, and so on. This
 #: is deterministic, needs no random seed, gives every replicated triple a plate in each half,
 #: and makes "equal halves" exactly "an even plate count".
-SPLIT_RULE = "plates sorted by id within each (line, drug, dose) triple, assigned alternately"
+SPLIT_RULE = (
+    "plates sorted by id as text within each (line, drug, dose) triple, assigned alternately"
+)
 
 DOSE_CANDIDATES = ("dose", "Dose", "drug_dose", "concentration", "dose_uM")
 
@@ -226,6 +228,9 @@ def split_assignment(
     alternately. Under that rule a triple with two plates always has one on each side, which
     the hash split gave only when the two plate ids happened to hash to different parities.
 
+    Plate ids are sorted as text, since that is the column's type in the table ("14" before
+    "6"); the order only has to be fixed and the same everywhere, and it is.
+
     Returns ``(assignment, pool, replicate_col)``. ``assignment`` has one row per (triple, plate)
     with its ``half``; ``pool`` has one row per triple with the plate counts per half, the
     equal-halves flag (``n_plates_half0 == n_plates_half1``, which is the exact condition
@@ -308,11 +313,9 @@ def read_assignment(cache_dir: Path) -> tuple[Path, pd.DataFrame, str]:
             f"the split in {cache_dir} was made under schema {meta.get('schema')!r}, this code "
             f"is {FRAME_SCHEMA!r}; rerun the assign stage rather than mixing the two"
         )
-    return (
-        cache_dir / ASSIGNMENT_FILE,
-        pd.read_parquet(cache_dir / POOL_FILE),
-        str(meta["replicate_col"]),
-    )
+    pool = pd.read_parquet(cache_dir / POOL_FILE)
+    pool["dose"] = normalise_dose(pool["dose"])
+    return cache_dir / ASSIGNMENT_FILE, pool, str(meta["replicate_col"])
 
 
 def _ensure_assignment(
@@ -1474,10 +1477,23 @@ def _normalise_keys(de: pd.DataFrame) -> pd.DataFrame:
     downstream coped with either, which is precisely the kind of difference that goes unnoticed
     until something does not -- so the two paths are made to agree here instead.
     """
+    if "dose" in de.columns:
+        de["dose"] = normalise_dose(de["dose"])
     for col in KEY_COLUMNS:
         if col in de.columns and not isinstance(de[col].dtype, pd.CategoricalDtype):
             de[col] = de[col].astype("category")
     return de
+
+
+def normalise_dose(values: pd.Series) -> pd.Series:
+    """Dose as float64 rounded to six decimals, so 0.05 is 0.05 in every table.
+
+    The table stores dose as float32; read into a float64 index it becomes 0.05000000074505806,
+    and a table written from that side no longer joins to one written from the other. Every
+    table this run commits carries dose through this function. The cached assignment keeps the
+    raw float32, because the slices join to it on the table's own type.
+    """
+    return pd.Series(np.round(values.astype("float64"), 6), index=values.index)
 
 
 def _cache_dir_for(args: argparse.Namespace) -> Path:
@@ -2140,9 +2156,9 @@ def _write_split_tables(cache_dir: Path, out_dir: Path) -> None:
     """The split assignment and the pool description, as the committed CSVs."""
     _, pool, _ = read_assignment(cache_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    pd.read_parquet(cache_dir / ASSIGNMENT_FILE).to_csv(
-        out_dir / "rung0_split_assignment.csv", index=False
-    )
+    assignment = pd.read_parquet(cache_dir / ASSIGNMENT_FILE)
+    assignment["dose"] = normalise_dose(assignment["dose"])
+    assignment.to_csv(out_dir / "rung0_split_assignment.csv", index=False)
     pool.to_csv(out_dir / "rung0_pool_description.csv", index=False)
 
 

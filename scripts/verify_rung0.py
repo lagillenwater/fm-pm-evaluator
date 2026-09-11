@@ -857,7 +857,13 @@ def check_pool_arithmetic(task_dir: Path) -> list[Check]:
     even_means_equal = bool(np.all(even == (half0 == half1)))
     even_means_parity = bool(np.all(even == (pool["n_plates"].to_numpy(dtype=int) % 2 == 0)))
 
-    ordered = split.sort_values([*keys, "plate"], kind="stable").reset_index(drop=True)
+    # Plate ids are text in the table and the split sorted them as text ("14" before "6");
+    # pandas reads all-digit ids back as integers, so the sort key is restored to text.
+    ordered = (
+        split.assign(plate_text=split["plate"].astype(str))
+        .sort_values([*keys, "plate_text"], kind="stable")
+        .reset_index(drop=True)
+    )
     rank = ordered.groupby(keys, sort=False).cumcount().to_numpy()
     alternates = bool(np.all(ordered["half"].to_numpy(dtype=int) == rank % 2))
     counts = (

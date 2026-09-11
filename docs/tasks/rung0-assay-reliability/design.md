@@ -105,7 +105,7 @@ and stratified by expression (`baseMean`) and by response size, each stratum poo
   rung is named for. It also gives the reliabilities and the noise decomposition one inclusion
   rule instead of two.
 - *Replicate unit and split.* The plate, within one dose. Within each (line, drug, dose) triple
-  the distinct plate ids are sorted and assigned alternately — first to group 0, second to group
+  the distinct plate ids are sorted as text (the column's type) and assigned alternately — first to group 0, second to group
   1, third to group 0 — one fixed, seedless split per triple, written out as a committed table
   (`rung0_split_assignment.csv`) rather than evaluated as a hash inside the aggregations. Every
   replicated triple therefore has a plate on each side, and "equal halves" is exactly "an even
