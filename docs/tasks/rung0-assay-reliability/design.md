@@ -261,8 +261,13 @@ it is meant to measure). The reported p-values read
 each reliability against the second and third. A mismatched draw for the responder reliability
 uses the genes the *first* condition's first group selected, intersected with the genes finite in
 the second condition's second group: the same selection rule as the matched pair. Because mismatched draws reuse the same half-profiles,
-an exact permutation check — 500 permutations of the pairing, once pooled and once within each
-stratum — measures the dependence the bootstrap ignores and reports it as a design effect.
+an exact permutation check — 100 permutations of the pairing, once pooled and once within each
+stratum — measures the dependence the bootstrap ignores and reports it as a design effect. One
+hundred, not the 500 first declared: each permutation re-scores every triple over every gene,
+about 3 h 20 min per gene set for 500 on one node, and the observed means sit more than a
+hundred null standard deviations above the null, so the check's product is the design effect,
+which 100 permutations estimate to about ten percent, not a p-value that needs finer resolution
+than 0.01 (`decisions.md`, 2026-09-10).
 
 ## Run and promotion
 

@@ -122,3 +122,13 @@ per `docs/PROCESS.md` §1 and SPEC project rule 2.
   `write_audit_checksums` (the audit interface). Added on 2026-09-09: `split_assignment`,
   `slice_aggregate`, `frame_from_slice`, `noise_from_slice`, `pooled_plate_variance`,
   `dose_strata_table`, `run_slice`, `load_slices`, `write_noise_outputs`.
+- **2026-09-10** — **The permutation check runs 100 permutations, not 500**, at Lucas's direction
+  ("cut the permutations to 100"). The all-gene set at 500 took 3 h 18 min on one node (job
+  32369086) and the responder set costs the same, single-threaded numpy re-scoring 6,654 triples
+  over 47,014 genes per permutation. What the check produces is the design effect — the ratio of
+  the null mean's true sampling variance under the pairing's dependence to the variance an
+  independent pool would have — and at 500 permutations it read 0.755 for all genes with the
+  observed mean 150 null standard deviations above the null; 100 permutations estimate the design
+  effect to about ten percent and resolve p to 0.01, which is all a verdict this far from its null
+  can use. Both gene sets run at 100 so the design states one number; the 500-permutation
+  all-gene outputs are superseded and not kept.

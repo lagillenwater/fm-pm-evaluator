@@ -38,6 +38,7 @@ for GENE_SET in ${RUNG0_GENE_SETS:-all responder}; do   # --export=ALL,RUNG0_GEN
         --local-dir "/scratch/alpine/$USER/tahoe_pseudobulk_de" \
         --cache-dir "$RUNG0_CACHE" \
         --slices "$RUNG0_SLICES" \
+        --n-perm "${RUNG0_N_PERM:-100}" \
         --gene-set "$GENE_SET" \
         --out-dir "$OUT_DIR"
 done
