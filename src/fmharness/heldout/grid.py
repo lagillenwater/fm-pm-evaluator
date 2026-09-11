@@ -18,6 +18,7 @@ a restriction record that pins every input byte the grid was built from.
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -230,6 +231,24 @@ def load_drug_metadata(path: Path) -> pd.DataFrame:
     )
 
 
+def load_grid(path: Path) -> Grid:
+    """The ``Grid`` a ``rung1_grid.json`` restriction record on disk describes.
+
+    The inverse of what ``scripts/heldout_grid.py`` writes (``metadata_name`` plus ``dose,
+    lines, drugs, excluded_pairs, sha256_lines, sha256_drugs, source_sha256``): later stages
+    need the grid itself, not the checksums, so they read it back rather than recomputing it
+    from rung 0's tables. ``excluded_pairs`` round-trips as a tuple of 2-tuples.
+    """
+    data = json.loads(path.read_text())
+    excluded_pairs = tuple((str(a), str(b)) for a, b in data["excluded_pairs"])
+    return Grid(
+        lines=tuple(str(v) for v in data["lines"]),
+        drugs=tuple(str(v) for v in data["drugs"]),
+        metadata_name=dict(data["metadata_name"]),
+        excluded_pairs=excluded_pairs,
+    )
+
+
 __all__ = [
     "DOSE_UM",
     "SCIPLEX_CIDS",
@@ -239,6 +258,7 @@ __all__ = [
     "ceiling_table",
     "grid_from_rung0",
     "load_drug_metadata",
+    "load_grid",
     "restriction_record",
     "sciplex_exposed_pairs",
 ]
