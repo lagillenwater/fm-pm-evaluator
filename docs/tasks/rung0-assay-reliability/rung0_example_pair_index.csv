@@ -1,0 +1,7 @@
+example_id,kind,patient0,drug0,dose0,patient1,drug1,dose1,n_genes_full,r_full,n_genes_shown,r_shown,n_responders_shown,r_responder_full
+matched_q05,matched,ACH-000927,Naproxen,5.0,ACH-000927,Naproxen,5.0,20354,-0.0224,20354,-0.0224,160,-0.4231
+matched_q25,matched,ACH-000389,Daidzin,5.0,ACH-000389,Daidzin,5.0,21233,0.0189,21233,0.0189,306,0.1299
+matched_q50,matched,ACH-000875,Palmatine (chloride),5.0,ACH-000875,Palmatine (chloride),5.0,25407,0.0627,25407,0.0627,401,0.7563
+matched_q95,matched,ACH-000580,Trametinib,0.05,ACH-000580,Trametinib,0.05,23909,0.1444,23909,0.1444,1664,0.4176
+same_drug_mismatch,same_drug_mismatch,ACH-000875,Palmatine (chloride),5.0,ACH-000120,Palmatine (chloride),5.0,16235,0.0413,16235,0.0413,390,0.5001
+diff_drug_mismatch,diff_drug_mismatch,ACH-000875,Palmatine (chloride),5.0,ACH-000120,(R)-Verapamil (hydrochloride),5.0,16848,0.0101,16848,0.0101,390,0.133

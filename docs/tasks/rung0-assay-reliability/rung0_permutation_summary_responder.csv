@@ -1,0 +1,2 @@
+replicate_col,n_genes,gene_set,n_pairs,n_perm,observed_mean,perm_mean_mean,perm_mean_sd,p_exact,se_iid_pool,design_effect,z_permutation,n_rows_same_drug,same_drug_rows_equal_n,observed_mean_same_drug_rows,observed_mean_diff_drug_rows,perm_mean_mean_same_drug,perm_mean_sd_same_drug,p_exact_same_drug,design_effect_same_drug,perm_mean_mean_diff_drug,perm_mean_sd_diff_drug,p_exact_diff_drug,design_effect_diff_drug
+plate,47014,responder,6654,100,0.4296,0.1189,0.0015,0.0099,0.00216,0.509,201.33,6654,True,0.4296,0.4296,0.2807,0.0008,0.0099,0.056,0.1158,0.0018,0.0099,0.505

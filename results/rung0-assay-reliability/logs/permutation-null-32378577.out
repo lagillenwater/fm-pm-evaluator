@@ -1,0 +1,77 @@
+=== permutation null, gene set: all ===
+all drugs (no drug list given); reading 1026 DE parquet files ...
+loaded the split-half frame from 32 cached slice(s) in /scratch/alpine/lgillenwater@xsede.org/rung0_cache_v3b
+no --panel-file given; scoring on all 47014 genes present in the data
+wrote /projects/lgillenwater@xsede.org/repositories/fm-pdo-evaluator/docs/tasks/rung0-assay-reliability/rung0_permutation_summary.params.json
+wrote /projects/lgillenwater@xsede.org/repositories/fm-pdo-evaluator/docs/tasks/rung0-assay-reliability/figures/11_permutation_vs_bootstrap.png
+
+=== permutation-based exact permutation null (rung 0, final verification step) ===
+  replicate_col          plate
+  n_genes                47014
+  gene_set               all
+  n_pairs                7641
+  n_perm                 100
+  observed_mean          0.0649
+  perm_mean_mean         0.019
+  perm_mean_sd           0.0003
+  p_exact                0.0099
+  se_iid_pool            0.00028
+  design_effect          1.257
+  z_permutation          144.58
+  n_rows_same_drug       7641
+  same_drug_rows_equal_n True
+  observed_mean_same_drug_rows 0.0649
+  observed_mean_diff_drug_rows 0.0649
+  perm_mean_mean_same_drug 0.0438
+  perm_mean_sd_same_drug 0.0001
+  p_exact_same_drug      0.0099
+  design_effect_same_drug 0.039
+  perm_mean_mean_diff_drug 0.0185
+  perm_mean_sd_diff_drug 0.0003
+  p_exact_diff_drug      0.0099
+  design_effect_diff_drug 0.704
+
+any-pair: observed mean r = 0.0649, permutation null mean = 0.0190 +/- 0.0003 (sd), p_exact = 0.0099, design effect = 1.257 (se_iid_pool = 0.00028).
+same-drug (7641 rows in >=2-row drug groups): observed mean r = 0.0649, within-drug null mean = 0.0438 +/- 0.0001 (sd), p_exact = 0.0099, design effect = 0.039.
+same-drug design effect measured over 7641 of 7641 rows (transfers directly to the promoted p_vs_same_drug)
+diff-drug: observed mean r = 0.0649, cross null mean = 0.0185 +/- 0.0003 (sd), p_exact = 0.0099, design effect = 0.704.
+wrote /projects/lgillenwater@xsede.org/repositories/fm-pdo-evaluator/docs/tasks/rung0-assay-reliability/rung0_permutation_summary.csv
+=== permutation null, gene set: responder ===
+all drugs (no drug list given); reading 1026 DE parquet files ...
+loaded the split-half frame from 32 cached slice(s) in /scratch/alpine/lgillenwater@xsede.org/rung0_cache_v3b
+no --panel-file given; scoring on all 47014 genes present in the data
+responder gene set: 948 genes per condition on average
+wrote /projects/lgillenwater@xsede.org/repositories/fm-pdo-evaluator/docs/tasks/rung0-assay-reliability/rung0_permutation_summary_responder.params.json
+wrote /projects/lgillenwater@xsede.org/repositories/fm-pdo-evaluator/docs/tasks/rung0-assay-reliability/figures/11_permutation_vs_bootstrap_responder.png
+
+=== permutation-based exact permutation null (rung 0, final verification step) ===
+  replicate_col          plate
+  n_genes                47014
+  gene_set               responder
+  n_pairs                6654
+  n_perm                 100
+  observed_mean          0.4296
+  perm_mean_mean         0.1189
+  perm_mean_sd           0.0015
+  p_exact                0.0099
+  se_iid_pool            0.00216
+  design_effect          0.509
+  z_permutation          201.33
+  n_rows_same_drug       6654
+  same_drug_rows_equal_n True
+  observed_mean_same_drug_rows 0.4296
+  observed_mean_diff_drug_rows 0.4296
+  perm_mean_mean_same_drug 0.2807
+  perm_mean_sd_same_drug 0.0008
+  p_exact_same_drug      0.0099
+  design_effect_same_drug 0.056
+  perm_mean_mean_diff_drug 0.1158
+  perm_mean_sd_diff_drug 0.0018
+  p_exact_diff_drug      0.0099
+  design_effect_diff_drug 0.505
+
+any-pair: observed mean r = 0.4296, permutation null mean = 0.1189 +/- 0.0015 (sd), p_exact = 0.0099, design effect = 0.509 (se_iid_pool = 0.00216).
+same-drug (6654 rows in >=2-row drug groups): observed mean r = 0.4296, within-drug null mean = 0.2807 +/- 0.0008 (sd), p_exact = 0.0099, design effect = 0.056.
+same-drug design effect measured over 6654 of 6654 rows (transfers directly to the promoted p_vs_same_drug)
+diff-drug: observed mean r = 0.4296, cross null mean = 0.1158 +/- 0.0018 (sd), p_exact = 0.0099, design effect = 0.505.
+wrote /projects/lgillenwater@xsede.org/repositories/fm-pdo-evaluator/docs/tasks/rung0-assay-reliability/rung0_permutation_summary_responder.csv

@@ -1,0 +1,67 @@
+all drugs (no drug list given); reading 1026 DE parquet files ...
+174,343,417 gene-conditions have both plate halves
+scoring every gene the table carries: 47014
+all-gene: 7641 conditions scored; responder: 6654 conditions, 949 genes each on average
+7491 of 7641 conditions split into equal halves
+null[all       any_pair  ] median r = +0.017 over 500 draws
+null[all       diff_drug ] median r = +0.017 over 500 draws
+null[all       same_drug ] median r = +0.038 over 500 draws
+null[responder any_pair  ] median r = +0.098 over 440 draws
+null[responder diff_drug ] median r = +0.095 over 431 draws
+null[responder same_drug ] median r = +0.294 over 440 draws
+wrote /projects/lgillenwater@xsede.org/repositories/fm-pdo-evaluator/docs/tasks/rung0-assay-reliability/rung0_reliability.params.json
+leakage control: [{'rule': 'one-sided', 'mean_r': -0.0033, 'genes_per_condition': 98}, {'rule': 'pooled', 'mean_r': 0.6837, 'genes_per_condition': 98}]
+wrote /projects/lgillenwater@xsede.org/repositories/fm-pdo-evaluator/docs/tasks/rung0-assay-reliability/rung0_noise_decomposition.params.json
+per-condition noise: 7,641 dose-conditions; between-plate share 0.0000 pooled over gene-conditions, 0.0195 over conditions, responders 0.7369
+/projects/lgillenwater@xsede.org/repositories/fm-pdo-evaluator/src/fmharness/figures.py:234: UserWarning: Creating legend with loc="best" can be slow with large amounts of data.
+  fig.savefig(out, dpi=150)
+wrote /projects/lgillenwater@xsede.org/repositories/fm-pdo-evaluator/docs/tasks/rung0-assay-reliability/audit_checksums.json (40 artifacts)
+
+=== rung 0: the reliability of the assay ===
+  replicate_col                              plate
+  n_genes                                    47014
+  padj_threshold                             0.05
+  all_n_pairs                                7641
+  all_splithalf_mean_r                       0.065
+  all_splithalf_median_r                     0.063
+  all_splithalf_q1_r                         0.019
+  all_splithalf_q3_r                         0.09
+  all_spearman_brown_full                    0.122
+  all_n_pairs_even                           7491
+  all_splithalf_mean_r_even_plates           0.066
+  all_spearman_brown_full_even_plates        0.123
+  all_frac_pos                               0.866
+  all_null_any_pair_mean_r                   0.019
+  all_null_diff_drug_mean_r                  0.017
+  all_null_same_drug_mean_r                  0.042
+  all_null_n_draws                           500
+  all_p_vs_null                              0.0005
+  all_p_vs_same_drug                         0.0005
+  all_null_mean_ci_lo                        0.016
+  all_null_mean_ci_hi                        0.017
+  all_mde_80_vs_diff_drug                    0.0179
+  all_mde_80_vs_same_drug                    0.0443
+  responder_n_pairs                          6654
+  responder_splithalf_mean_r                 0.43
+  responder_splithalf_median_r               0.597
+  responder_splithalf_q1_r                   0.09
+  responder_splithalf_q3_r                   0.713
+  responder_spearman_brown_full              0.601
+  responder_n_pairs_even                     6518
+  responder_splithalf_mean_r_even_plates     0.437
+  responder_spearman_brown_full_even_plates  0.608
+  responder_frac_pos                         0.817
+  responder_null_any_pair_mean_r             0.101
+  responder_null_diff_drug_mean_r            0.106
+  responder_null_same_drug_mean_r            0.257
+  responder_null_n_draws                     431
+  responder_p_vs_null                        0.0005
+  responder_p_vs_same_drug                   0.0005
+  responder_null_mean_ci_lo                  0.102
+  responder_null_mean_ci_hi                  0.11
+  responder_mde_80_vs_diff_drug              0.1135
+  responder_mde_80_vs_same_drug              0.2662
+
+all-gene    r = 0.065 (Spearman-Brown 0.122) over 7641 conditions
+responder   r = 0.430 (Spearman-Brown 0.601) over 6654 conditions
+wrote /projects/lgillenwater@xsede.org/repositories/fm-pdo-evaluator/docs/tasks/rung0-assay-reliability/rung0_reliability.csv

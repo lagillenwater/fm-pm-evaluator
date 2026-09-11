@@ -1,0 +1,32 @@
+{
+  "result": "rung0_reliability.csv",
+  "git_sha": "8392557778b0655560cab5679a596de633a7ac9d",
+  "slurm_job_id": "32379206",
+  "args": {
+    "local_dir": "/scratch/alpine/lgillenwater@xsede.org/tahoe_pseudobulk_de",
+    "drugs_cid_file": "",
+    "drug_names_file": "None",
+    "replicate_col": "None",
+    "min_genes": "50",
+    "padj_threshold": "0.05",
+    "panel_file": "None",
+    "n_perm": "500",
+    "seed": "0",
+    "out_dir": "/projects/lgillenwater@xsede.org/repositories/fm-pdo-evaluator/docs/tasks/rung0-assay-reliability",
+    "stage": "combine",
+    "slices": "32",
+    "slice_index": "None",
+    "cache_dir": "/scratch/alpine/lgillenwater@xsede.org/rung0_cache_v3b",
+    "duckdb_memory": "36GB",
+    "duckdb_threads": "None",
+    "noise_sample_rows": "2000000"
+  },
+  "all_n_pairs": 7641,
+  "responder_n_pairs": 6654,
+  "selection_rule": "padj < threshold in at least one of the first plate group's rows",
+  "gene_inclusion": "every gene the table carries",
+  "drug_inclusion": "every drug with a (line, drug, dose) triple on two or more plates",
+  "dose_handling": "held fixed: a condition is a (line, drug, dose) triple and the split is between that triple's plates",
+  "split_rule": "plates sorted by id as text within each (line, drug, dose) triple, assigned alternately",
+  "weighting": "the declared ceilings are the dose-level rows of rung0_dose_strata.csv, each against nulls drawn at its own dose; this row's mean weighs every scored triple once and is reported, not divided by"
+}

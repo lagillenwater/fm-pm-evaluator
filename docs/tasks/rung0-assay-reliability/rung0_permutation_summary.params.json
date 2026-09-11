@@ -1,0 +1,22 @@
+{
+  "result": "rung0_permutation_summary.csv",
+  "git_sha": "6e39bf2d567e06bf873c1685a5a36dd6b8888a8f",
+  "slurm_job_id": "32378577",
+  "args": {
+    "local_dir": "/scratch/alpine/lgillenwater@xsede.org/tahoe_pseudobulk_de",
+    "drugs_cid_file": "",
+    "drug_names_file": "None",
+    "panel_file": "None",
+    "cache_dir": "/scratch/alpine/lgillenwater@xsede.org/rung0_cache_v3b",
+    "slices": "32",
+    "duckdb_memory": "36GB",
+    "duckdb_threads": "None",
+    "replicate_col": "None",
+    "min_genes": "50",
+    "n_perm": "100",
+    "seed": "0",
+    "out_dir": "/projects/lgillenwater@xsede.org/repositories/fm-pdo-evaluator/docs/tasks/rung0-assay-reliability",
+    "gene_set": "all"
+  },
+  "n_pairs": 7641
+}
