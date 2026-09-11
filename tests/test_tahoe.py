@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from fmharness.tahoe import parse_dose_um, scatter_tokens
+from fmharness.tahoe import parse_dose_um, scatter_flat_tokens, scatter_tokens
 
 
 def test_scatter_tokens_maps_panel_and_drops_marker_and_offpanel() -> None:
@@ -25,6 +25,41 @@ def test_scatter_tokens_maps_panel_and_drops_marker_and_offpanel() -> None:
 
 def test_scatter_tokens_empty() -> None:
     m = scatter_tokens([], [], {10: 0}, 1)
+    assert m.shape == (0, 1)
+
+
+def test_scatter_flat_tokens_matches_scatter_tokens_including_a_zero_panel_gene_cell() -> None:
+    """``scatter_tokens`` is a thin wrapper over ``scatter_flat_tokens`` (task 4 review round
+    2: the two must not be able to drift apart). This flattens the same ragged cells
+    ``scatter_tokens`` is tested against above by hand -- plus a third cell whose tokens are
+    all off-panel/marker (zero panel genes) -- and checks the flat-input helper gives exactly
+    the same result as the ragged-input wrapper, including that all-zero row."""
+    token_to_col = {10: 0, 20: 1, 30: 2}
+    genes = [
+        np.array([99, 10, 20]),
+        np.array([99, 30, 40]),
+        np.array([99, 40, 41]),  # no panel genes at all -- must scatter to an all-zero row
+    ]
+    exprs = [
+        np.array([7.0, 1.0, 2.0]),
+        np.array([7.0, 3.0, 9.0]),
+        np.array([7.0, 5.0, 6.0]),
+    ]
+
+    via_wrapper = scatter_tokens(genes, exprs, token_to_col, 3)
+
+    lengths = np.array([len(g) for g in genes], dtype=np.int64)
+    flat_tokens = np.concatenate(genes)
+    flat_values = np.concatenate(exprs)
+    via_flat = scatter_flat_tokens(flat_tokens, flat_values, lengths, token_to_col, 3)
+
+    assert via_flat.shape == via_wrapper.shape == (3, 3)
+    np.testing.assert_array_equal(via_flat.toarray(), via_wrapper.toarray())
+    assert via_flat.toarray()[2].tolist() == [0.0, 0.0, 0.0]
+
+
+def test_scatter_flat_tokens_empty() -> None:
+    m = scatter_flat_tokens(np.array([], dtype=np.int64), np.array([]), np.array([]), {10: 0}, 1)
     assert m.shape == (0, 1)
 
 

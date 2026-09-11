@@ -82,6 +82,7 @@ from fmharness.heldout.cells import (  # noqa: E402
 from fmharness.heldout.grid import Grid, load_grid  # noqa: E402
 from fmharness.heldout.records import is_done, sha256_file, write_record  # noqa: E402
 from fmharness.schema import Tranche  # noqa: E402
+from fmharness.tahoe import scatter_flat_tokens  # noqa: E402
 
 TAHOE = "tahoebio/Tahoe-100M"
 TAHOE_REVISION = "2dc57900b7981cfcf5e211527169a0b006546a95"
@@ -270,19 +271,9 @@ def scan_shard(
         expr_values = expr_taken.values.to_numpy(zero_copy_only=False).copy()
 
         lengths = np.diff(gene_offsets)
-        rows_rel = np.repeat(np.arange(keep_rows.size), lengths)
-        cols = pd.Series(gene_values).map(token_to_col)
-        keep_tok = cols.notna().to_numpy()
-        cols_arr = cols.to_numpy()
-        coo = sparse.coo_matrix(
-            (
-                expr_values[keep_tok].astype(np.float32),
-                (rows_rel[keep_tok], cols_arr[keep_tok].astype(np.int64)),
-            ),
-            shape=(keep_rows.size, n_cols),
-            dtype=np.float32,
+        counts_blocks.append(
+            scatter_flat_tokens(gene_values, expr_values, lengths, token_to_col, n_cols)
         )
-        counts_blocks.append(cast(sparse.csr_matrix, coo.tocsr()))
 
     meta = pd.concat(meta_blocks, ignore_index=True) if meta_blocks else _empty_meta_frame()
     counts = cast(
