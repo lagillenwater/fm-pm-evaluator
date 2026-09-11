@@ -111,3 +111,56 @@ this one.
   `scripts/download_tahoe_pseudobulk_de.py`): the same aggregation without the split —
   mean `log2FoldChange` and `baseMean` per (line, drug, gene) over all plates and doses.
   Consumed by rung 1 ([docs/SPEC.md](SPEC.md)) when that rung arrives.
+
+---
+
+## Tahoe-100M DMSO cells (rung 1)
+
+**What it is.** Rung 1 describes each of its 50 cell lines from cells that saw no drug — only
+the solvent used to carry a drug into a well, dimethyl sulfoxide (DMSO), recorded in Tahoe-100M
+as the drug value `DMSO_TF`. This is a different read of the atlas from the
+`pseudobulk_differential_expression` table above: it reads Tahoe's per-cell matrix directly (the
+`expression_data` configuration, `data/train-XXXXX-of-03388.parquet`, 3,388 shards) rather than
+a pre-aggregated table, and it keeps whole single cells (not summary statistics) for the 50 grid
+lines only.
+
+**Source.** Hugging Face [`tahoebio/Tahoe-100M`](https://huggingface.co/datasets/tahoebio/Tahoe-100M),
+`expression_data` configuration, pinned revision `2dc57900b7981cfcf5e211527169a0b006546a95` (the
+same revision rung 1's grid and drug table are read from). Each shard carries, per cell, the drug
+name, the cell line's Cellosaurus identifier, its plate and sample, and its gene expression as a
+tokenized (gene-id, count) list; `metadata/gene_metadata.parquet` at the same revision maps gene
+token ids to gene symbols.
+
+**Selection rule.** Up to 1,000 DMSO cells per grid line, spread evenly over the line's plates,
+picked deterministically rather than by streaming order:
+
+1. Every DMSO cell of a grid line gets a 64-bit key from `splitmix64` of its shard position
+   (shard index, row group, row) mixed with a fixed seed (0) — the same cell gets the same key
+   no matter what order the 3,388 shards happen to be scanned in.
+2. A cheap first filter keeps a 25% *superset* of those keys (below a fixed threshold), so the
+   expensive part of the read — decoding each cell's full gene-expression list — only ever runs
+   on a bounded quarter of the DMSO cells, not the whole corpus.
+3. Within that superset, each line's per-plate quota is `ceil(1,000 / plates for that line)`; the
+   quota's smallest keys are kept per (line, plate) — a plate with fewer cells than its quota
+   simply gives all of them. Those kept cells are then capped at the smallest 1,000 keys per
+   line.
+4. Each selected cell's key also gives it a split-half label (bit 1 of the key, independent of
+   the bit the superset filter reads), used to check how reliable a line description is by
+   comparing its two halves.
+
+Cells are read over the Stack gene panel (15,012 genes, matched to Tahoe's gene metadata
+case-insensitively) as raw counts, since Stack expects raw counts in per-line groups.
+
+**Scripts.** `src/fmharness/heldout/cells.py` (the selection math: cell keys, the superset
+filter, plate-balanced selection, the split-half label, and pseudobulk log2(counts per million +
+1)) and `scripts/heldout_dmso_cells.py` (the Hugging Face read, one block of shards at a time,
+and the combine step that selects, writes one AnnData file per line, the pseudobulk expression
+tables, and the tranche record below).
+
+**Where it lives.** Alpine scratch, under the rung's cache directory (`RUNG1_CACHE`, e.g.
+`/scratch/alpine/$USER/rung1_cache`): `cells/line_{i}.h5ad` per grid line, plus
+`expression.parquet` and `expression_halves.parquet`. Scratch is purgeable; the selection is
+reproducible from the seed and rule above via `scripts/heldout_dmso_cells.py`. Ingested as
+tranche `tahoe100m-dmso-cells.v1` (`data/tranches/`) once a run registers it: the record's
+content hash is computed over the 50 per-line files' manifest, per the environment contract
+(`docs/environment.md` §6).
