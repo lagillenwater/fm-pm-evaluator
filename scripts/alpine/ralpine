@@ -124,7 +124,7 @@ ASIDE_INIT='aside=_moved_aside/$(date -u +%Y%m%dT%H%M%SZ)'
 move_aside_cmd() {
   local range="$1"
   echo "git diff --name-only --no-renames --diff-filter=A $range | while IFS= read -r f; do \
-          if [ -e \"\$f\" ] && ! git ls-files --error-unmatch -- \"\$f\" >/dev/null 2>&1; then \
+          if [ -e \"\$f\" ] && ! git --literal-pathspecs ls-files --error-unmatch -- \"\$f\" >/dev/null 2>&1; then \
             mkdir -p \"\$aside/\$(dirname -- \"\$f\")\" && mv -- \"\$f\" \"\$aside/\$f\" && \
             echo \"moved aside (untracked, incoming commit adds it): \$f -> \$aside/\$f\" || exit 1; \
           fi; done"
@@ -136,21 +136,51 @@ move_aside_cmd() {
 # handles, hit for real the first time this switch shipped (rung 0's evidence commit touched
 # figures/ and docs/tasks/rung0-assay-reliability/ paths already modified on the Alpine
 # checkout by having run rung 0 there). Given the target ref (e.g. "origin/<branch>"), echoes
-# the fragment that finds every path git diff --name-only HEAD reports modified AND that
-# differs between HEAD and the target, copies each into $aside (never deletes, never restores
-# without copying first: `cp -p` before `git checkout HEAD --`, chained with `&&` so a failed
-# `cp` never reaches the checkout), and restores it to HEAD's content so `git switch` no longer
-# sees a conflicting local change. `update` never had this case (a fast-forward never rewrites
-# a tracked file's committed content out from under a local edit the way a branch switch does),
+# the fragment that finds every path modified relative to HEAD AND that differs between HEAD
+# and the target, copies each into $aside (never deletes, never restores without copying
+# first: `cp -p` before `git checkout HEAD --`, chained with `&&` so a failed `cp` never
+# reaches the checkout), and restores it to HEAD's content so `git switch` no longer sees a
+# conflicting local change. `update` never had this case (a fast-forward never rewrites a
+# tracked file's committed content out from under a local edit the way a branch switch does),
 # so this is not folded into move_aside_cmd. Same `|| exit 1` loud-failure rule as above.
+#
+# Three edge cases fixed 2026-09-11 (later re-review), all found before any of them bit on
+# Alpine:
+#   - A path git diff --name-only HEAD reports modified can be DELETED locally (no longer on
+#     disk) -- `cp` would fail with "No such file", aborting a switch that plain `git switch`
+#     would have handled fine on its own. Skipped instead: `[ -e "$f" ] || [ -L "$f" ]`, echoed,
+#     nothing copied or restored, left for git to sort out.
+#   - A path containing glob characters (e.g. `data/a[1].csv`) is not a literal path to git by
+#     default -- `git checkout HEAD -- 'data/a[1].csv'` could also restore `data/a1.csv` without
+#     it ever having been copied aside. `--literal-pathspecs` on both the per-path `git diff`
+#     and the `git checkout` below (and on move_aside_cmd's `git ls-files`, above) turns every
+#     `-- "$f"` back into an exact path match.
+#   - `git diff --quiet HEAD "$target" -- "$f"` exits 128 if `$target` does not resolve (e.g. a
+#     typo'd branch); `!` turned that into "differs," so a bad branch name used to copy and
+#     restore every locally-modified tracked file before `git switch` finally failed. `switch`'s
+#     case arm now verifies the branch exists right after `git fetch`, before anything else
+#     runs; belt-and-suspenders here, an exit code of 2 or more from this diff (anything but "0
+#     = same" or "1 = differs") also aborts loudly instead of being read as "differs."
+#   - The modified-file list is read into `$modified` (a variable) BEFORE the loop starts,
+#     rather than piping `git diff --name-only HEAD` straight into the `while`: the loop's own
+#     `git checkout` writes the index, and running that concurrently with an still-live `git
+#     diff --name-only HEAD` process feeding the pipe risked an index.lock race.
 copy_aside_cmd() {
   local target="$1"
-  echo "git diff --name-only HEAD | while IFS= read -r f; do \
-          if ! git diff --quiet HEAD \"$target\" -- \"\$f\"; then \
-            mkdir -p \"\$aside/\$(dirname -- \"\$f\")\" && cp -p -- \"\$f\" \"\$aside/\$f\" && \
-            git checkout HEAD -- \"\$f\" && \
+  echo "modified=\$(git diff --name-only HEAD) && printf '%s\n' \"\$modified\" | while IFS= read -r f; do \
+          [ -n \"\$f\" ] || continue; \
+          if [ ! -e \"\$f\" ] && [ ! -L \"\$f\" ]; then \
+            echo \"skipped (not present locally, target changes it): \$f\"; continue; \
+          fi; \
+          if git --literal-pathspecs diff --quiet HEAD \"$target\" -- \"\$f\"; then continue; fi; \
+          rc=\$?; \
+          if [ \"\$rc\" -ge 2 ]; then \
+            echo \"git diff failed (exit \$rc) comparing HEAD to $target for \$f\" >&2; exit 1; \
+          fi; \
+          mkdir -p \"\$aside/\$(dirname -- \"\$f\")\" && cp -p -- \"\$f\" \"\$aside/\$f\" && \
+            git --literal-pathspecs checkout HEAD -- \"\$f\" && \
             echo \"copied aside (tracked, modified locally, target changes it): \$f -> \$aside/\$f\" || exit 1; \
-          fi; done"
+        done"
 }
 
 # Run an allowlisted command remotely. Arguments are passed through a single-quoted,
@@ -212,9 +242,12 @@ case "$sub" in
   switch)
     # Move the Alpine checkout to another origin branch, then fast-forward it. Added
     # 2026-08-27 for branch-per-task (PROCESS §4): `update` only fast-forwards the
-    # CURRENT branch, so a new task's first deployment needs this once. `git switch`
-    # refuses rather than clobbering local changes, same safety property as update;
-    # --guess creates the local tracking branch from origin/<branch> when absent.
+    # CURRENT branch, so a new task's first deployment needs this once. `git switch` would
+    # refuse rather than clobber local changes -- this copies aside (and restores to HEAD)
+    # every tracked file the target branch also changes, and moves aside every untracked
+    # file the target adds, before switch ever runs, same safety property as update, just
+    # reached by clearing the obstruction instead of hitting it; --guess creates the local
+    # tracking branch from origin/<branch> when absent.
     #
     # Move-aside added 2026-09-11: rung1-held-out-prediction-work is the first task branch
     # whose target tracks the PREVIOUS task's run outputs (rung 0's evidence commit added,
@@ -233,7 +266,15 @@ case "$sub" in
     # output paths that were both TRACKED and modified on the Alpine checkout (e.g.
     # figures/01_build.png), which the target branch also changes. copy_aside_cmd handles that
     # case into the same $aside directory; see its comment above for why it isn't in
-    # move_aside_cmd.
+    # move_aside_cmd (including three edge cases fixed in it the same day: a locally-deleted
+    # tracked path, glob characters in a path, and a nonexistent target branch misread as
+    # "differs").
+    #
+    # The nonexistent-branch check below (also 2026-09-11) runs right after `git fetch` and
+    # before anything else: without it, a typo'd branch name made `git diff --quiet HEAD
+    # "origin/<branch>"` exit 128 (not found), which `!` reads the same as "differs" -- every
+    # locally-modified tracked file would be copied and restored before `git switch` finally
+    # failed on the bad ref, all for nothing.
     [[ $# -eq 1 ]] || die "usage: ralpine switch <branch>"
     [[ "$1" =~ ^[A-Za-z0-9._/-]+$ ]] || die "refusing '$1': not a plausible branch name"
     [[ "$1" != -* ]] || die "refusing '$1': a branch name cannot begin with '-'"
@@ -241,6 +282,8 @@ case "$sub" in
     move_aside="$(move_aside_cmd "HEAD origin/$branch_q")"
     copy_aside="$(copy_aside_cmd "origin/$branch_q")"
     remote_fixed "cd $(printf '%q' "$REMOTE_ROOT") && git fetch --quiet origin && \
+                  git rev-parse --verify --quiet \"origin/$branch_q^{commit}\" >/dev/null || \
+                    { echo \"ralpine: origin/$1 does not exist on the remote\" >&2; exit 1; } && \
                   $ASIDE_INIT && \
                   $move_aside && \
                   $copy_aside && \

@@ -10,14 +10,19 @@ that drifts silently in a script nobody runs through a test suite -- `find` was 
 once already (closed 2026-08-28) and this file exists to make the next regression fail loudly
 instead.
 
-A second group of tests DOES execute things, but never touches git, the network, or real
-ssh:
+A second group of tests DOES execute things, but never touches the real network, a real
+host, or this repository's own git state:
   - a few extract one helper function's body from the script's source and run it standalone
     via `bash -c` (it only `echo`s a string; nothing it does can reach outside that subshell),
     always with `cwd` pinned to a pytest `tmp_path`, never the repository;
   - a few run `scripts/alpine/ralpine` itself as a real subprocess, but with a stub `ssh`
-    (a tiny script this file writes to `tmp_path`) placed first on PATH, so no real network
-    connection is ever attempted; these also run with `cwd=tmp_path`.
+    (a tiny script this file writes to `tmp_path`) that only records its arguments and never
+    contacts any host, placed first on PATH -- these also run with `cwd=tmp_path`;
+  - one runs `scripts/alpine/ralpine switch` end to end against a disposable local git
+    repository built entirely under `tmp_path` (a bare "origin," a "clone" standing in for
+    the Alpine checkout, and a target branch), with a stub `ssh` that actually EXECUTES the
+    remote command it receives -- but only ever `cd`s into that throwaway clone, never this
+    repository or any real host.
 """
 
 from __future__ import annotations
@@ -168,14 +173,23 @@ def test_move_aside_cmd_never_deletes_only_moves_and_ignores_renames(tmp_path: P
         "move_aside_cmd must move into the shared $aside directory (set once by ASIDE_INIT, "
         "not by move_aside_cmd itself, so switch's move- and copy-aside steps share one run)"
     )
-    assert "git ls-files --error-unmatch" in rendered, (
-        "move_aside_cmd must test 'untracked' the same way update always has"
+    assert "git --literal-pathspecs ls-files --error-unmatch" in rendered, (
+        "move_aside_cmd must test 'untracked' the same way update always has, with "
+        "--literal-pathspecs"
     )
     assert "--no-renames" in rendered, (
         "move_aside_cmd must pass --no-renames to its diff -A -- otherwise a path git detects "
         "as a rename is reported as R, not A, and silently skipped (Ruling 20)"
     )
     assert "--diff-filter=A" in rendered
+
+
+def test_move_aside_cmd_uses_literal_pathspecs_for_ls_files(tmp_path: Path) -> None:
+    rendered = _render_function("move_aside_cmd", "HEAD..@{u}", tmp_path)
+    assert 'git --literal-pathspecs ls-files --error-unmatch -- "$f"' in rendered, (
+        "move_aside_cmd's untracked check must use --literal-pathspecs too, so a path "
+        "containing glob characters is matched exactly, not as a glob"
+    )
 
 
 def test_move_aside_cmd_loop_failure_is_loud() -> None:
@@ -201,17 +215,19 @@ def test_copy_aside_cmd_copies_before_checkout_never_deletes(tmp_path: Path) -> 
         "copy_aside_cmd must never delete"
     )
     assert 'cp -p -- "$f"' in rendered, "copy_aside_cmd must copy with `cp -p` before touching $f"
-    assert "git checkout HEAD -- " in rendered, (
-        "copy_aside_cmd must restore the tracked file to HEAD's content"
+    assert "git --literal-pathspecs checkout HEAD -- " in rendered, (
+        "copy_aside_cmd must restore the tracked file to HEAD's content, with --literal-pathspecs"
     )
-    assert 'git diff --quiet HEAD "origin/some-branch" -- "$f"' in rendered, (
-        "copy_aside_cmd must compare HEAD against the given target ref for that path"
+    assert 'git --literal-pathspecs diff --quiet HEAD "origin/some-branch" -- "$f"' in rendered, (
+        "copy_aside_cmd must compare HEAD against the given target ref for that path, with "
+        "--literal-pathspecs so a path containing glob characters (e.g. 'data/a[1].csv') is "
+        "matched exactly rather than as a glob (Ruling: glob characters in paths)"
     )
 
     mkdir_idx = rendered.find("mkdir -p")
     cp_idx = rendered.find("cp -p")
-    checkout_idx = rendered.find("git checkout HEAD")
-    echo_idx = rendered.find("echo ")
+    checkout_idx = rendered.find("git --literal-pathspecs checkout HEAD")
+    echo_idx = rendered.find('echo "copied aside')
     assert -1 not in (mkdir_idx, cp_idx, checkout_idx, echo_idx)
     assert mkdir_idx < cp_idx < checkout_idx < echo_idx, (
         "copy_aside_cmd must mkdir, then cp, then checkout, then echo, in that order -- a "
@@ -228,6 +244,68 @@ def test_copy_aside_cmd_loop_failure_is_loud() -> None:
     )
     assert re.search(r"cp -p -- \S+ \S+ &&", body), (
         "cp must be && before the following git checkout, not run unconditionally"
+    )
+
+
+def test_copy_aside_cmd_skips_a_locally_deleted_path(tmp_path: Path) -> None:
+    body = _function_body("copy_aside_cmd")
+    assert r"if [ ! -e \"\$f\" ] && [ ! -L \"\$f\" ]; then" in body, (
+        "copy_aside_cmd must check for a path missing from the working tree (deleted locally, "
+        "neither a regular file nor a symlink) before ever calling cp on it -- cp would fail "
+        "with 'No such file', aborting a switch that plain `git switch` would have handled fine"
+    )
+    assert r"echo \"skipped (not present locally, target changes it): \$f\"; continue;" in body
+
+    rendered = _render_function("copy_aside_cmd", "origin/some-branch", tmp_path)
+    skip_idx = rendered.find('[ ! -e "$f" ] && [ ! -L "$f" ]')
+    skip_message_idx = rendered.find("skipped (not present locally")
+    cp_idx = rendered.find("cp -p")
+    assert -1 not in (skip_idx, skip_message_idx, cp_idx)
+    assert skip_idx < skip_message_idx < cp_idx, (
+        "the missing-path check and its skip message must come before any cp is attempted"
+    )
+    assert "continue" in rendered[skip_message_idx : skip_message_idx + 90], (
+        "the missing-path branch must `continue` to the next path, not fall through into cp"
+    )
+
+
+def test_copy_aside_cmd_distinguishes_differs_from_error() -> None:
+    body = _function_body("copy_aside_cmd")
+    # The target check must not be a naive `if ! git diff --quiet ...; then <copy>; fi` --
+    # `git diff --quiet` exits 128 for a target ref that doesn't resolve, and `!` would read
+    # that the same as "differs," copying and restoring every locally-modified tracked file
+    # before `git switch` finally failed on the bad ref. The check must be right-side-up (not
+    # inverted): "if the diff reports no difference, skip this path" -- and a captured exit
+    # code >= 2 (anything but 0 = same or 1 = differs) must abort loudly instead of being read
+    # as "differs."
+    assert (
+        r"if git --literal-pathspecs diff --quiet HEAD \"$target\" -- \"\$f\"; then continue; fi;"
+        in body
+    ), (
+        "the diff check must not be inverted with `!` -- it must test for 'no difference' "
+        "directly and `continue` in that (positive) branch"
+    )
+    assert r"rc=\$?;" in body, "the diff's exit code must be captured, not just tested with `!`"
+    assert r"if [ \"\$rc\" -ge 2 ]; then" in body, (
+        "an exit code of 2 or more (an error, not '0 = same' or '1 = differs') must be "
+        "distinguished and aborted, not silently treated as 'differs'"
+    )
+
+
+def test_copy_aside_cmd_reads_modified_list_into_a_variable_first() -> None:
+    body = _function_body("copy_aside_cmd")
+    assert (
+        r"modified=\$(git diff --name-only HEAD) && printf '%s\n' \"\$modified\" | while IFS= read -r f; do"
+        in body
+    ), (
+        "the modified-file list must be captured into $modified BEFORE the loop runs, not "
+        "piped straight from git diff into the while loop -- otherwise git diff --name-only "
+        "HEAD can still be running (and racing an index.lock) while the loop's own git "
+        "checkout writes the index; the list must still be split one path per line with "
+        "IFS= read -r"
+    )
+    assert "git diff --name-only HEAD |" not in body, (
+        "git diff --name-only HEAD must not be piped directly into the while loop"
     )
 
 
@@ -267,19 +345,41 @@ def test_switch_remote_command_moves_and_copies_aside_before_switch_and_merge() 
     )
 
     arg = _remote_fixed_arg(block)
+    fetch_idx = arg.find("git fetch --quiet origin")
+    verify_idx = arg.find("git rev-parse --verify --quiet")
     aside_init_idx = arg.find("$ASIDE_INIT")
     move_aside_idx = arg.find("$move_aside")
     copy_aside_idx = arg.find("$copy_aside")
     switch_idx = arg.find("git switch --guess")
     merge_idx = arg.find("git merge --ff-only")
-    assert -1 not in (aside_init_idx, move_aside_idx, copy_aside_idx, switch_idx, merge_idx), (
-        "switch's remote_fixed argument must splice in $ASIDE_INIT, $move_aside, $copy_aside, "
-        "the switch, and the merge -- deleting any one of these splices must fail this test"
+    assert -1 not in (
+        fetch_idx,
+        verify_idx,
+        aside_init_idx,
+        move_aside_idx,
+        copy_aside_idx,
+        switch_idx,
+        merge_idx,
+    ), (
+        "switch's remote_fixed argument must splice in the fetch, the target-branch existence "
+        "check, $ASIDE_INIT, $move_aside, $copy_aside, the switch, and the merge -- deleting "
+        "any one of these splices must fail this test"
     )
-    assert aside_init_idx < move_aside_idx < copy_aside_idx < switch_idx < merge_idx, (
-        "switch must: init the aside dir, move untracked additions aside, copy tracked "
-        "modifications aside, THEN switch, THEN merge -- in that order, inside the actual "
-        "remote command"
+    assert (
+        fetch_idx
+        < verify_idx
+        < aside_init_idx
+        < move_aside_idx
+        < copy_aside_idx
+        < switch_idx
+        < merge_idx
+    ), (
+        "switch must: fetch, verify the target branch exists, init the aside dir, move "
+        "untracked additions aside, copy tracked modifications aside, THEN switch, THEN "
+        "merge -- in that order, inside the actual remote command. The existence check must "
+        "run before the aside steps: without it, a typo'd branch makes `git diff --quiet HEAD "
+        "\"origin/<branch>\"` exit 128, which `!` would read as 'differs,' copying and "
+        "restoring every locally-modified tracked file before `git switch` finally failed."
     )
 
     # The range passed to move_aside_cmd (and the target passed to copy_aside_cmd) must compare
@@ -295,6 +395,28 @@ def test_switch_remote_command_moves_and_copies_aside_before_switch_and_merge() 
 
     assert "rm " not in arg and "git clean" not in arg and "reset --hard" not in arg
     assert "--discard-changes" not in arg
+
+    # Each helper's loop must be joined to the NEXT step with && (a loop failure -- exit 1
+    # inside the pipe's subshell -- must stop the chain), not `;` (which would run the next
+    # step regardless).
+    assert "$move_aside &&" in arg, "$move_aside must be && to the next step, not ;"
+    assert "$copy_aside &&" in arg, "$copy_aside must be && to the next step, not ;"
+    assert "$move_aside ;" not in arg and "$move_aside;" not in arg
+    assert "$copy_aside ;" not in arg and "$copy_aside;" not in arg
+
+
+def test_switch_verifies_target_branch_exists_with_a_clear_message() -> None:
+    block = _case_block("switch")
+    arg = _remote_fixed_arg(block)
+    assert 'git rev-parse --verify --quiet \\"origin/$branch_q^{commit}\\" >/dev/null' in arg, (
+        "switch must verify the target branch resolves to a commit before doing anything else"
+    )
+    assert "does not exist" in arg, "the failure must explain itself, not just exit"
+    # `exit 1` here runs directly in the remote shell (not inside a subshell/pipe), so it must
+    # actually stop the whole remote command, not just this one check.
+    assert re.search(r">/dev/null \|\|\s*\\\n?\s*\{ echo .* exit 1; \}", arg) or (
+        ">/dev/null ||" in arg and "exit 1; }" in arg
+    ), "a nonexistent branch must abort with exit 1, not merely be logged"
 
     # The branch is still validated and still spliced in only via printf %q.
     assert "printf '%q'" in block, "switch must still quote the branch name with printf %q"
@@ -454,3 +576,155 @@ def test_update_captured_remote_command_is_safe_and_ordered(tmp_path: Path) -> N
     merge_idx = rendered.find("git merge --ff-only")
     assert -1 not in (aside_idx, move_idx, merge_idx)
     assert aside_idx < move_idx < merge_idx
+
+
+# ---------------------------------------------------------------------------------------------
+# One end-to-end test: the rendered `switch` command, run for real (via a stub `ssh` that
+# EXECUTES it) against a disposable local git repository built entirely under `tmp_path`.
+# Exercises all three Important edge cases from the same review together: an untracked path
+# the target adds, a tracked path modified locally that the target also changes (including one
+# whose path contains a glob character), and a tracked path DELETED locally that the target
+# changes (must be skipped, not fail the whole switch). Never touches this repository, a real
+# host, or the network.
+# ---------------------------------------------------------------------------------------------
+
+_GIT_TEST_ENV = {
+    "GIT_AUTHOR_NAME": "ralpine-test",
+    "GIT_AUTHOR_EMAIL": "ralpine-test@example.invalid",
+    "GIT_COMMITTER_NAME": "ralpine-test",
+    "GIT_COMMITTER_EMAIL": "ralpine-test@example.invalid",
+}
+
+# A stub ssh that, unlike _STUB_SSH above, actually RUNS the command it receives (via `bash -c`)
+# instead of just recording it -- but the received command always starts with `cd
+# $REMOTE_ROOT`, so it only ever touches the throwaway clone this test points ALPINE_ROOT at,
+# never any real host or this repository. Mirrors remote_fixed's own invocation shape:
+# `ssh -o BatchMode=yes "$HOST" "$rendered"` -- four args, drop the first two, then the host,
+# then exec the command.
+_EXEC_STUB_SSH = """#!/usr/bin/env bash
+shift 2
+shift
+exec bash -c "$1"
+"""
+
+
+def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    env = dict(os.environ)
+    env.update(_GIT_TEST_ENV)
+    return subprocess.run(
+        ["git", "-c", "commit.gpgsign=false", "-c", "init.defaultBranch=main", *args],
+        cwd=cwd,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=10,
+    )
+
+
+def test_switch_end_to_end_against_a_throwaway_local_git_repo(tmp_path: Path) -> None:
+    origin = tmp_path / "origin.git"
+    build = tmp_path / "build"
+    remote_root = tmp_path / "remote_root"
+
+    _git(tmp_path, "init", "--bare", str(origin))
+
+    build.mkdir()
+    _git(build, "init")
+    (build / "data").mkdir()
+    (build / "keep.txt").write_text("keep\n")
+    (build / "shared.txt").write_text("shared v1\n")
+    (build / "data" / "a[1].csv").write_text("a1 v1\n")
+    (build / "data" / "a1.csv").write_text("a1-plain v1\n")
+    (build / "deleteme.txt").write_text("will be deleted locally\n")
+    _git(build, "add", "-A")
+    _git(build, "commit", "-m", "base")
+    _git(build, "remote", "add", "origin", str(origin))
+    _git(build, "push", "origin", "main")
+
+    # The target branch: adds a path (matching an untracked file remote_root will have),
+    # modifies a path remote_root has modified locally, modifies the glob-char path, and
+    # modifies the path remote_root will have deleted locally.
+    _git(build, "checkout", "-b", "target-branch")
+    (build / "new_output.csv").write_text("target's new output\n")
+    (build / "shared.txt").write_text("shared v2 from target\n")
+    (build / "data" / "a[1].csv").write_text("a1 v2 from target\n")
+    (build / "deleteme.txt").write_text("deleteme v2 from target\n")
+    _git(build, "add", "-A")
+    _git(build, "commit", "-m", "target changes")
+    _git(build, "push", "origin", "target-branch")
+
+    _git(tmp_path, "clone", "--quiet", str(origin), str(remote_root))
+    _git(remote_root, "checkout", "main")
+
+    # Simulate a prior run's leftovers on the Alpine checkout -- exactly the shapes this fix
+    # targets, all uncommitted:
+    (remote_root / "new_output.csv").write_text("untracked local output\n")  # untracked, added
+    (remote_root / "shared.txt").write_text("local edit to shared.txt\n")  # tracked, modified
+    (remote_root / "data" / "a[1].csv").write_text(
+        "local edit to a[1].csv\n"
+    )  # tracked, modified, glob-char path
+    (remote_root / "deleteme.txt").unlink()  # tracked, deleted locally
+
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    ssh_stub = bindir / "ssh"
+    ssh_stub.write_text(_EXEC_STUB_SSH)
+    ssh_stub.chmod(0o755)
+
+    env = dict(os.environ)
+    env["PATH"] = f"{bindir}:{env.get('PATH', '')}"
+    env["ALPINE_HOST"] = "stub.invalid"
+    env["ALPINE_ROOT"] = str(remote_root)
+    env.update(_GIT_TEST_ENV)
+
+    result = subprocess.run(
+        ["bash", str(RALPINE_PATH), "switch", "target-branch"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+
+    # Switched onto the target branch, at its tip.
+    branch = _git(remote_root, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+    assert branch == "target-branch"
+    head = _git(remote_root, "rev-parse", "HEAD").stdout.strip()
+    target_tip = _git(build, "rev-parse", "target-branch").stdout.strip()
+    assert head == target_tip
+
+    # The untracked addition: switched to the target's tracked content; the original
+    # untracked content was moved aside, not lost.
+    assert (remote_root / "new_output.csv").read_text() == "target's new output\n"
+
+    # The locally-modified tracked file: switched to the target's content; the local edit
+    # was copied aside, not lost.
+    assert (remote_root / "shared.txt").read_text() == "shared v2 from target\n"
+
+    # The glob-char path: switched to the target's content; the local edit was copied aside
+    # under its OWN exact path (--literal-pathspecs, not a glob match); its non-glob sibling
+    # was never touched by any of this at all.
+    assert (remote_root / "data" / "a[1].csv").read_text() == "a1 v2 from target\n"
+    assert (remote_root / "data" / "a1.csv").read_text() == "a1-plain v1\n"
+
+    # The locally-deleted tracked file: skipped by copy_aside_cmd (nothing to cp), left for
+    # `git switch` itself, which materializes the target's version since nothing blocks it.
+    assert (remote_root / "deleteme.txt").read_text() == "deleteme v2 from target\n"
+
+    # Untouched throughout (identical, unmodified, on both branches).
+    assert (remote_root / "keep.txt").read_text() == "keep\n"
+
+    aside_dirs = list((remote_root / "_moved_aside").iterdir())
+    assert len(aside_dirs) == 1, "exactly one aside run for this switch"
+    aside = aside_dirs[0]
+    assert (aside / "new_output.csv").read_text() == "untracked local output\n"
+    assert (aside / "shared.txt").read_text() == "local edit to shared.txt\n"
+    assert (aside / "data" / "a[1].csv").read_text() == "local edit to a[1].csv\n"
+    # The deleted file was never copied aside -- there was nothing on disk to copy.
+    assert not (aside / "deleteme.txt").exists()
+
+    assert "skipped (not present locally, target changes it): deleteme.txt" in (
+        result.stdout + result.stderr
+    )
