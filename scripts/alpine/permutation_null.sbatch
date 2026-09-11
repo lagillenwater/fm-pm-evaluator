@@ -32,7 +32,7 @@ cd "$REPO"
 # smaller set of genes per condition. No drug list and no panel, for the reason given in
 # rung0_combine.sbatch. Submitted by submit_rung0_chain.sh after the combine job.
 source scripts/alpine/rung0_env.sh
-for GENE_SET in all responder; do
+for GENE_SET in ${RUNG0_GENE_SETS:-all responder}; do   # --export=ALL,RUNG0_GENE_SETS=responder runs one set
     echo "=== permutation null, gene set: $GENE_SET ==="
     python scripts/permutation_null.py \
         --local-dir "/scratch/alpine/$USER/tahoe_pseudobulk_de" \
