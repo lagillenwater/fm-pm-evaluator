@@ -4,12 +4,16 @@
 #SBATCH --qos=cpu-normal
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=16
-#SBATCH --mem=60G                    # 16 cores x 3,840 MB = 61,440 MB = 60G exactly (Slurm's
-                                     # G is GiB; 61G would be 62,464 MB, 1,024 MB over budget);
-                                     # rung 0's own slice array (a wider scan of the same table)
-                                     # needed 84G at 8 cores, so this slice's DuckDB engine
-                                     # limit (20GB) plus its ~35-40G overhead fits inside 60G
+#SBATCH --cpus-per-task=20
+#SBATCH --mem=75G                    # 20 cores x 3,840 MB = 76,800 MB = 75G exactly. DuckDB
+                                     # below runs with a 20GB memory-limit; PROCESS §2 measured
+                                     # this engine peaking 35-40GB above its own limit on this
+                                     # 89GB table, so 20GB + that overhead is ~55-60GB, inside
+                                     # 75G. The sibling crosswalk call (rung1_grid.sbatch) OOM'd
+                                     # in job 32422188 at --mem=30G with no --memory-limit set
+                                     # (MaxRSS 31.5GB against DuckDB's unbounded 20GB default);
+                                     # this job already passes --memory-limit/--threads below,
+                                     # but the same overhead rule sizes its --mem too.
 #SBATCH --time=04:00:00              # rung 0 saw scratch reads run 3x slower than usual; a
                                      # gene-hash slice of 107 drugs x 50 lines is far smaller
                                      # than rung 0's full scan, but the slack carries over

@@ -4,9 +4,16 @@
 #SBATCH --qos=cpu-normal
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=30G                    # 8 cores x 3,840 MB; this stage only writes small tables
-                                     # and fetches two metadata files, never scans the DE table
+#SBATCH --cpus-per-task=20
+#SBATCH --mem=75G                    # 20 cores x 3,840 MB = 76,800 MB = 75G exactly. The
+                                     # crosswalk scan below runs heldout_answers.py's DuckDB
+                                     # engine at a 20GB memory-limit; PROCESS §2 measured this
+                                     # engine peaking 35-40GB above its own limit on this 89GB
+                                     # table, so 20GB + that overhead is ~55-60GB, inside 75G.
+                                     # Job 32422188 OOM'd at --mem=30G (MaxRSS 31.5GB) because
+                                     # this call passed no --memory-limit/--threads and ran on
+                                     # DuckDB's unbounded defaults (20GB limit, 4 threads) with
+                                     # no headroom for the overhead.
 #SBATCH --time=02:00:00              # a Hugging Face metadata pull plus a crosswalk scan of the
                                      # DE table's key columns alone
 #SBATCH --output=logs/%x-%j.out
@@ -43,4 +50,6 @@ python scripts/heldout_answers.py \
     --crosswalk \
     --local-dir "$TAHOE_DE_DIR" \
     --grid "$OUT_DIR/rung1_grid.json" \
-    --out-dir "$OUT_DIR"
+    --out-dir "$OUT_DIR" \
+    --memory-limit 20GB \
+    --threads 4

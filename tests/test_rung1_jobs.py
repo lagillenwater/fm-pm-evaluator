@@ -22,14 +22,14 @@ CHAIN_SH = ALPINE_DIR / "submit_rung1_chain.sh"
 
 DATA_SBATCH = {
     "rung1_grid.sbatch": {
-        "cores": 8,
-        "mem_mb": 30 * 1024,
+        "cores": 20,
+        "mem_mb": 75 * 1024,
         "partition": "acpu",
         "qos": "cpu-normal",
     },
     "rung1_answers.sbatch": {
-        "cores": 16,
-        "mem_mb": 60 * 1024,
+        "cores": 20,
+        "mem_mb": 75 * 1024,
         "partition": "acpu",
         "qos": "cpu-normal",
         "array": "0-7",
@@ -82,6 +82,36 @@ def _mem_to_mb(mem: str) -> int:
     assert match is not None, f"unrecognized --mem value: {mem!r}"
     value, unit = match.groups()
     return int(value) * 1024 if unit == "G" else int(value)
+
+
+# PROCESS §2: a DuckDB process against the 89 GB Tahoe DE table peaks roughly 35-40 GB above
+# its own --memory-limit, whatever the slice size. Job 32422188 (rung1_grid.sbatch's crosswalk
+# call) OOM'd at --mem=30G because it passed no --memory-limit/--threads at all and ran on
+# DuckDB's unbounded defaults with no headroom for that overhead. Any job script that hands
+# heldout_answers.py a --local-dir (i.e. actually scans the DE table, as opposed to --combine,
+# which only reassembles already-cached parquet slices) must therefore pin --memory-limit
+# explicitly and size --mem to at least that limit plus the measured overhead.
+DUCKDB_OVERHEAD_MB = 35 * 1024
+
+
+def _memory_limit_gb(call_text: str) -> int | None:
+    """Parse the ``--memory-limit <N>GB`` value passed alongside a heldout_answers.py call."""
+    match = re.search(r"--memory-limit\s+(\d+)GB", call_text)
+    return int(match.group(1)) if match is not None else None
+
+
+def _heldout_answers_call(text: str) -> str | None:
+    """The full (possibly multi-line, backslash-continued) heldout_answers.py invocation."""
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        if "python scripts/heldout_answers.py" in line:
+            block = [line]
+            j = i
+            while lines[j].rstrip().endswith("\\"):
+                j += 1
+                block.append(lines[j])
+            return "\n".join(block)
+    return None
 
 
 def _read(name: str) -> str:
@@ -152,6 +182,33 @@ def test_cpu_job_memory_is_within_its_core_budget(name: str) -> None:
     assert mem_mb == spec["mem_mb"]
     assert mem_mb <= cores * MEM_PER_CORE_MB, (
         f"{name}: --mem={mem} is {mem_mb} MB, over {cores} cores x {MEM_PER_CORE_MB} MB/core"
+    )
+
+
+@pytest.mark.parametrize("name", sorted(DATA_SBATCH))
+def test_heldout_answers_table_scan_pins_memory_limit_with_overhead_headroom(name: str) -> None:
+    """Job 32422188 (rung1_grid.sbatch's crosswalk call) OOM'd at --mem=30G, MaxRSS 31.5 GB,
+    because it scanned the DE table via --local-dir with no --memory-limit/--threads at all, so
+    DuckDB ran on its unbounded defaults. Any job that scans the table (passes --local-dir to
+    heldout_answers.py) must pin --memory-limit explicitly and size --mem to at least that limit
+    plus PROCESS §2's measured ~35-40 GB overhead. --combine calls (no --local-dir, no table
+    scan) are exempt.
+    """
+    text = _read(name)
+    call = _heldout_answers_call(text)
+    if call is None or "--local-dir" not in call:
+        pytest.skip(f"{name} does not scan the DE table (no --local-dir)")
+    limit_gb = _memory_limit_gb(call)
+    assert limit_gb is not None, (
+        f"{name}: heldout_answers.py scans the DE table (--local-dir) but passes no "
+        "--memory-limit, so DuckDB falls back to its unbounded defaults (job 32422188's "
+        "failure mode)"
+    )
+    mem_mb = _mem_to_mb(_sbatch_directive(text, "mem"))
+    required_mb = limit_gb * 1024 + DUCKDB_OVERHEAD_MB
+    assert mem_mb >= required_mb, (
+        f"{name}: --mem is {mem_mb} MB, under the {limit_gb}GB engine limit plus PROCESS §2's "
+        f"{DUCKDB_OVERHEAD_MB} MB overhead ({required_mb} MB required)"
     )
 
 
