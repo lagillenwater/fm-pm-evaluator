@@ -25,7 +25,10 @@ Models predict the departure from the baseline (the interaction) and share one e
   pca / nmf    OLS of the training lines' departure on 10 components of baseline expression
   stack_*      the same OLS on 10 PCs of a Stack checkpoint's embedding of the baseline
 Score = Pearson r between predicted and observed Y on the panel, per held-out condition,
-then averaged per drug (scheme line) or per line (the drug schemes).
+then averaged per drug (scheme line) or per line (the drug schemes). Beside each score sits
+``ceiling_panel``: the split-half r of that condition's two plate halves over the SAME panel,
+so the fraction of ceiling is a ratio of like quantities (rung 0's ``noise_de`` is the
+split-half r on the condition's own DE genes, a different and much smaller set).
 
 Baseline expression per line is the mean DESeq2 ``baseMean`` over that line's contrasts in a
 strided subset of the raw shards -- treated and vehicle pseudobulks averaged over many drugs, which
@@ -54,6 +57,7 @@ ALPHA = 0.05
 K_NEIGHBOURS = 5
 N_COMPONENTS = 10
 MIN_PANEL = 10
+CEILING = "ceiling_panel"  # split-half r of the held-out condition on the scored panel
 MODELS = ("mean", "knn", "pca", "nmf", "stack_base", "stack_cytokine", "stack_sciplex")
 STACK_VERSIONS = {"stack_base": "CKPT_BASE", "stack_cytokine": "CKPT_CYTOKINE", "stack_sciplex": "CKPT_DRUG"}
 
@@ -102,7 +106,7 @@ def build(args: argparse.Namespace) -> None:
         raise FileNotFoundError(f"no frame_*.parquet under {args.rung0_cache}")
     log(f"reading {len(frames)} rung 0 frame slices at {DOSE} uM")
     de = con.execute(
-        f"""SELECT patient, drug, gene_name,
+        f"""SELECT patient, drug, gene_name, lfc0, lfc1,
                    (lfc0 + lfc1) / 2 AS y,
                    coalesce(least(padj0, padj1) < {ALPHA}, false) AS de
             FROM read_parquet(?)
@@ -116,6 +120,8 @@ def build(args: argparse.Namespace) -> None:
     log(f"block: {len(lines)} lines x {len(drugs)} drugs x {len(genes)} genes, {len(de):,} gene-conditions")
     Y = _dense(de, "y", lines, drugs, genes, np.nan)
     D = _dense(de, "de", lines, drugs, genes, False)
+    H0 = _dense(de, "lfc0", lines, drugs, genes, np.nan)  # the two plate halves, for the
+    H1 = _dense(de, "lfc1", lines, drugs, genes, np.nan)  # split-half ceiling on each panel
     del de
 
     shards = sorted(str(p) for p in args.tahoe_dir.rglob("*.parquet") if DE_SUBSTRING in str(p))
@@ -140,7 +146,7 @@ def build(args: argparse.Namespace) -> None:
     log(f"baseline: median observations per (line, gene) = {float(base['n'].median()):.0f}; "
         f"lines with no rows: {int((n_obs == 0).sum())}")
 
-    np.savez(args.cache / "tensors.npz", Y=Y, D=D, E=E, lines=np.asarray(lines), drugs=np.asarray(drugs), genes=np.asarray(genes))
+    np.savez(args.cache / "tensors.npz", Y=Y, D=D, H0=H0, H1=H1, E=E, lines=np.asarray(lines), drugs=np.asarray(drugs), genes=np.asarray(genes))
 
     import anndata as ad
 
@@ -242,7 +248,7 @@ def ols_predict(X: np.ndarray, i: int, train: np.ndarray, B_tr: np.ndarray) -> n
 
 def score(args: argparse.Namespace, noise_drug: pd.DataFrame, noise_line: pd.DataFrame) -> None:
     t = np.load(args.cache / "tensors.npz", allow_pickle=True)
-    Y, D, E = t["Y"], t["D"], t["E"]
+    Y, D, E, H0, H1 = t["Y"], t["D"], t["E"], t["H0"], t["H1"]
     lines, drugs = pd.Index(t["lines"]), pd.Index(t["drugs"])
     n_l = len(lines)
     reps = representations(E, args.cache)
@@ -274,6 +280,8 @@ def score(args: argparse.Namespace, noise_drug: pd.DataFrame, noise_line: pd.Dat
         for m in models:
             r, n = masked_pearson(base_line + preds[m], obs, panel)
             rows.append(pd.DataFrame({"scheme": "line", "line": lines[i], "drug": drugs, "model": m, "r": r, "n_panel": n}))
+        r, n = masked_pearson(H0[i], H1[i], panel)
+        rows.append(pd.DataFrame({"scheme": "line", "line": lines[i], "drug": drugs, "model": CEILING, "r": r, "n_panel": n}))
 
         # --- scheme drugcell: (l, d*) out, baseline = l's mean over its other drugs
         with np.errstate(invalid="ignore"):
@@ -288,6 +296,8 @@ def score(args: argparse.Namespace, noise_drug: pd.DataFrame, noise_line: pd.Dat
         for m in models:
             r, n = masked_pearson(base_cell + preds[m], obs, panel)
             rows.append(pd.DataFrame({"scheme": "drugcell", "line": lines[i], "drug": drugs, "model": m, "r": r, "n_panel": n}))
+        r, n = masked_pearson(H0[i], H1[i], panel)
+        rows.append(pd.DataFrame({"scheme": "drugcell", "line": lines[i], "drug": drugs, "model": CEILING, "r": r, "n_panel": n}))
         log(f"fold {i + 1}/{n_l} {lines[i]}")
 
     per = pd.concat(rows, ignore_index=True).dropna(subset=["r"])
@@ -296,17 +306,22 @@ def score(args: argparse.Namespace, noise_drug: pd.DataFrame, noise_line: pd.Dat
     def table(scheme: str, by: str, noise: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
         sub = per[per["scheme"] == scheme]
         other = "drug" if by == "line" else "line"
-        wide = sub.pivot_table(index=by, columns="model", values="r", aggfunc="mean")[cols]
+        wide = sub.pivot_table(index=by, columns="model", values="r", aggfunc="mean")
+        ceiling = wide[[CEILING]]
+        wide = wide[cols]
         wide.columns = [f"r_{c}" for c in wide.columns]
         meta = sub[sub["model"] == "mean"].groupby(by).agg(**{f"n_{other}s": (other, "nunique")}, n_panel_median=("n_panel", "median"))
-        out = meta.join(noise[["noise_de"]]).join(wide)
+        out = meta.join(noise[["noise_de"]]).join(ceiling).join(wide)
         return out.sort_values("noise_de", ascending=False).round(4)
 
     table("line", "drug", noise_drug, models).to_csv(args.out / "rung1_line_per_drug.csv")
     table("drugcell", "line", noise_line, models).to_csv(args.out / "rung1_drugcell_per_line.csv")
     table("drugcell", "line", noise_line, ["mean"]).to_csv(args.out / "rung1_drugwhole_per_line.csv")
 
-    summary = per.groupby(["scheme", "model"])["r"].agg(["mean", "median", "count"]).round(4)
+    summary = per.groupby(["scheme", "model"])["r"].agg(["mean", "median", "count"])
+    ceiling_mean = summary["mean"].xs(CEILING, level="model")
+    summary["frac_of_panel_ceiling"] = summary["mean"] / summary.index.get_level_values("scheme").map(ceiling_mean).to_numpy()
+    summary = summary.round(4)
     summary.to_csv(args.out / "rung1_summary.csv")
     log("summary (mean r per scheme x model):\n" + summary.to_string())
 
