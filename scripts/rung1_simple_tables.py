@@ -1,63 +1,78 @@
-"""Rung 0 noise per drug and per line, and rung 1 held-out prediction, as five tables.
+"""Rung 0 noise per drug and per line, and rung 1 held-out-line prediction, as three tables.
 
 Everything runs on Alpine from what is already on scratch; nothing is downloaded.
 
 Rung 0 -- two group-bys of the promoted per-pair split-half table at 5 uM:
   rung0_noise_per_drug.csv   one row per drug, split-half r averaged over its lines
   rung0_noise_per_line.csv   one row per line, split-half r averaged over its drugs
-``noise_de`` is the r over the DE genes and is the ceiling every rung 1 row reads against.
+``noise_de`` is the r over the DE genes and says where the reliable signal is.
 
-Rung 1 -- Y[line, drug, gene] is the 5 uM log2 fold change averaged over plates (the two
-half means of the rung 0 cache averaged), D the padj < 0.05 call on any plate. One holdout
-scheme, a fold loop over lines with vectorised array algebra inside:
+Rung 1 -- the question: given a cell line never seen before, and only its baseline expression,
+can a model predict how its expression changes under a drug better than assuming it responds
+like the average line? Y[line, drug, gene] is the 5 uM log2 fold change averaged over plates
+(the two half means of the rung 0 cache averaged), D the padj < 0.05 call on any plate.
 
-  line l* is held out of everything. Baseline = the drug's mean over the other lines.
-  Panel = the held-out condition's OWN DE genes, D[l*, d] -- selected by the target's
-  response, never shown to a predictor, identical for every model. Rung 0 put the
-  reliable signal there (split-half r ~0.6, against ~0.1 on any wide panel, including the
-  union over training lines that an earlier run scored on).
+  Holdout   line l* is held out of everything; the other 48 lines are the training lines.
+  Panel     the held-out condition's OWN DE genes, D[l*, d], intersected with Stack's gene
+            list so every model is scored on one panel. Selected by the target's response,
+            never shown to a predictor, identical for every model. Rung 0 put the reliable
+            signal there (split-half r ~0.6, against ~0.1 on any wide panel).
+  Ceiling   ``ceiling_panel``: the split-half r of that condition's two plate halves on the
+            same panel. The bound a predictor of the two-plate mean can attain is
+            sqrt(2r/(1+r)), the square root of Y's Spearman-Brown reliability.
+  Score     Pearson r between the predicted and the observed log fold change on the panel,
+            per held-out condition, averaged per drug.
+
+Every model predicts the held-out line's treated expression from its baseline and the other
+lines' responses to the same drug, so every column is the same kind of object:
+
+  mean            apply the drug's average fold change over the training lines
+  knn             apply the average fold change of the 5 training lines nearest in baseline
+                  expression
+  pca, nmf        encode -> shift -> decode. Fit 10 components on the 49 baselines (unsupervised,
+                  no response data). Encode the training lines' baselines (z) and their
+                  treated profiles for drug d (t); fit the latent shift t = A z + b on the 48
+                  training lines; for the held-out line predict t* = A z* + b and decode the
+                  shift (t* - z*) back to genes. The decoded shift lives in the span of the
+                  baseline components, so a drug effect that is not a baseline program is
+                  invisible to the direct column; ``pca_adj`` / ``nmf_adj`` use the model only
+                  for the departure: drug mean + decode(l*'s latent shift minus the training
+                  lines' mean fitted shift). The mean model is the departure set to zero.
+  stack_*         Stack in in-context generation mode (the two checkpoints with a generation
+                  head: the cytokine-aligned model and the sci-Plex fine-tune). One 512-cell
+                  set per (drug, held-out line), assembled the way the model was trained:
+                  128 baseline cells of the training lines (the prompt, attending only to
+                  itself), 256 treated cells of the training lines for this drug (the context,
+                  visible to all), and 128 baseline cells of the held-out line (the query,
+                  marked by the model's query embedding). The model returns each query cell's
+                  expected treated counts; the predicted fold change is the query block's
+                  mean over its own baseline mean. ``stack_*_adj`` is the same prediction used
+                  only for the departure: drug mean + (Stack's prediction for l* minus Stack's
+                  mean prediction over the training lines).
+
+How a line's expression reaches Stack. Stack is a single-cell model trained on raw UMI counts
+(~10^4 per cell, most genes at zero). Each line's baseline profile (mean DESeq2 baseMean over
+its contrasts in every third raw shard) is normalised to gene probabilities and cells are drawn
+as multinomial(10^4, p): count vectors with a cell's sparsity and magnitude whose expectation
+is the line's profile. Treated cells are drawn the same way from baseline x 2^lfc. Untested
+genes (no fold change) are left at baseline.
 
 The drug axis (a line's mean over its other drugs predicting a new drug) was dropped on
 2026-09-12: on this platform every drug in line l on plate p is contrasted against the same
 DMSO pseudobulk, so that baseline shares control noise with its target and scored above the
-attainable bound (1.15x). Making it honest needs plate ids the frame cache does not carry.
+attainable bound (1.15x). The earlier embedding -> 10 PCs -> OLS framing was dropped the same
+day: it tests our regression on Stack's features, not Stack's own prediction.
 
-Models predict the departure from the baseline (the interaction) and share one equation:
-  mean         departure 0
-  knn          average departure of the 5 nearest training lines in baseline expression
-  pca / nmf    OLS of the training lines' departure on 10 components of baseline expression
-  stack_*      the same OLS on 10 PCs of a Stack checkpoint's embedding of the baseline
-Score = Pearson r between predicted and observed Y on the panel, per held-out condition,
-then averaged per drug. Beside each score sits ``ceiling_panel``, the split-half r of that
-condition's two plate halves over the same panel, and the summary divides by the bound a
-predictor of the two-plate mean can attain, sqrt(2r / (1 + r)) -- the square root of the
-Spearman-Brown reliability of Y.
-
-Baseline expression per line is the mean DESeq2 ``baseMean`` over that line's contrasts in
-every third raw shard (the shards are laid out by line; every tenth missed ACH-000750) -- treated and vehicle pseudobulks averaged over many drugs, which
-is the line's expression level on the screen's own platform.
-
-How a line's baseline reaches Stack. Stack is a single-cell model: it was trained on raw UMI
-counts of individual cells (~10^4 counts, most genes at zero), it applies log1p and tokenises
-genes into modules, and its attention runs over a SET of cells drawn from one sample. A
-pseudobulk profile scaled to 10^6 counts is nothing it has seen -- every value sits 2-5 log
-units above training -- and rounding a 10^4-scaled profile zeroes 90% of genes
-deterministically. So each line's baseline is turned into synthetic cells instead: the mean
-baseMean profile is normalised to gene probabilities p, and K = one Stack set's worth of
-cells (model.n_cells, 128 for Stack-Large) are drawn as multinomial(10^4, p). Each draw is a
-count vector with the sparsity and magnitude of a real cell whose expectation is the line's
-profile; the K cells of one line form exactly one attention set, as one sample's cells do
-in training; the K embeddings are averaged per line, which removes the sampling noise the
-draws introduced. The same synthetic cells go through all three checkpoints.
-
-Stages: build (duckdb -> tensors), embed (synthetic cells -> three Stack checkpoints, each
-skipped with a note if it fails), score (the tables). ``--stage all`` runs them in order.
+Stages: build (duckdb -> tensors), generate (Stack, GPU; one checkpoint per array task), score
+(the tables, CPU). ``--stage all`` runs them in order.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
+import pickle
 import sys
 import time
 from pathlib import Path
@@ -74,11 +89,13 @@ K_NEIGHBOURS = 5
 N_COMPONENTS = 10
 MIN_PANEL = 10
 CEILING = "ceiling_panel"  # split-half r of the held-out condition on the scored panel
-MODELS = ("mean", "knn", "pca", "nmf", "stack_base", "stack_cytokine", "stack_sciplex")
 STACK_LIBRARY = 10_000  # counts per synthetic cell: the library size of a typical Tahoe cell
 STACK_SEED = 0
+EPS_COUNTS = 0.05  # pseudocount, in counts per 10^4, for the generated fold change
 DROP_LINES = ("NA",)  # a line whose DepMap id is the literal string NA; no baseline can be joined to it
-STACK_VERSIONS = {"stack_base": "CKPT_BASE", "stack_cytokine": "CKPT_CYTOKINE", "stack_sciplex": "CKPT_DRUG"}
+GEN_MODELS = {"stack_cytokine": "CKPT_CYTOKINE", "stack_sciplex": "CKPT_DRUG"}  # checkpoints with a generation head
+MODELS = ("mean", "knn", "pca", "pca_adj", "nmf", "nmf_adj",
+          "stack_cytokine", "stack_cytokine_adj", "stack_sciplex", "stack_sciplex_adj")
 
 
 def log(msg: str) -> None:
@@ -89,8 +106,8 @@ def log(msg: str) -> None:
 
 
 def rung0_tables(per_pair_csv: Path, out: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
-    d = pd.read_csv(per_pair_csv)
-    d = d[d["dose"].astype(float) == DOSE]
+    d = pd.read_csv(per_pair_csv, keep_default_na=False, na_values=[""])
+    d = d[(d["dose"].astype(float) == DOSE) & ~d["patient"].isin(DROP_LINES)]
     agg = dict(noise_all=("r", "mean"), noise_de=("r_responder", "mean"), n_de_median=("n_responders", "median"))
     per_drug = d.groupby("drug").agg(n_lines=("patient", "nunique"), **agg).sort_values("noise_de", ascending=False)
     per_line = d.groupby("patient").agg(n_drugs=("drug", "nunique"), **agg).sort_values("noise_de", ascending=False)
@@ -116,6 +133,9 @@ def _dense(df: pd.DataFrame, value: str, lines: pd.Index, drugs: pd.Index, genes
 def build(args: argparse.Namespace) -> None:
     import duckdb
 
+    if (args.cache / "tensors.npz").exists():
+        log("tensors.npz present, skipping build")
+        return
     con = duckdb.connect()
     con.execute(f"SET memory_limit='{args.duckdb_memory}'; SET threads={args.duckdb_threads};")
     con.execute(f"SET temp_directory='{args.cache / 'duckdb_tmp'}';")
@@ -145,8 +165,8 @@ def build(args: argparse.Namespace) -> None:
     del de
 
     shards = sorted(str(p) for p in args.tahoe_dir.rglob("*.parquet") if DE_SUBSTRING in str(p))
-    # The shards are laid out by line (30 consecutive shards held 2 lines, job 32435735), so
-    # the subset is strided across the whole set rather than taken from the front.
+    # The shards are laid out by line (30 consecutive shards held 2 lines, job 32435735; every
+    # tenth missed ACH-000750, job 32435791), so take every third across the whole set.
     shards = shards[:: args.shard_stride]
     if not shards:
         raise FileNotFoundError(f"no DE shards under {args.tahoe_dir}")
@@ -164,8 +184,7 @@ def build(args: argparse.Namespace) -> None:
     E[lines.get_indexer(base["patient"]), genes.get_indexer(base["gene_name"])] = base["base_mean"].to_numpy()
     n_obs = base.groupby("patient")["n"].median().reindex(lines).fillna(0)
     missing = list(lines[n_obs.to_numpy() == 0])
-    log(f"baseline: median observations per (line, gene) = {float(base['n'].median()):.0f}; "
-        f"lines with no rows: {missing}")
+    log(f"baseline: median observations per (line, gene) = {float(base['n'].median()):.0f}; lines with no rows: {missing}")
     if missing:
         raise RuntimeError(f"no baseline expression for {missing}: lower --shard-stride")
 
@@ -173,80 +192,110 @@ def build(args: argparse.Namespace) -> None:
     log("wrote tensors.npz")
 
 
-# ----------------------------------------------------------------------------- embed
+# ----------------------------------------------------------------------------- synthetic cells
 
 
-def synthetic_cells(E: np.ndarray, k: int, library: int, seed: int):
-    """k multinomial draws of ``library`` counts per line from the line's baseline profile,
-    line-major (line 0's k cells, then line 1's ...) so that k consecutive cells are one line.
-    Returns a CSR matrix of shape (n_lines * k, n_genes) and the line index of each row."""
+def profile_probabilities(E: np.ndarray, lfc: np.ndarray | None = None) -> np.ndarray:
+    """Gene probabilities of each line's baseline, or of its treated state baseline x 2^lfc
+    (untested genes, NaN lfc, stay at baseline)."""
+    prof = E if lfc is None else E * np.exp2(np.nan_to_num(lfc, nan=0.0))
+    return prof / np.maximum(prof.sum(-1, keepdims=True), 1e-12)
+
+
+def draw_cells(p: np.ndarray, k: int, rng: np.random.Generator):
+    """k multinomial cells of STACK_LIBRARY counts from each row of p; CSR of shape (rows*k, genes),
+    row-major (row 0's k cells, then row 1's ...)."""
     from scipy import sparse
 
-    rng = np.random.default_rng(seed)
-    p = E / np.maximum(E.sum(1, keepdims=True), 1e-12)
-    blocks = [sparse.csr_matrix(rng.multinomial(library, p[i], size=k).astype(np.float32)) for i in range(len(E))]
-    return sparse.vstack(blocks).tocsr(), np.repeat(np.arange(len(E)), k)
+    blocks = [sparse.csr_matrix(rng.multinomial(STACK_LIBRARY, p[i], size=k).astype(np.float32)) for i in range(len(p))]
+    return sparse.vstack(blocks).tocsr()
 
 
-def write_synthetic_h5ad(args: argparse.Namespace, k: int) -> Path:
+def load_stack_genes(genelist: Path | None) -> list[str] | None:
+    if genelist is None or not genelist.exists():
+        return None
+    with genelist.open("rb") as fh:
+        return [str(g) for g in pickle.load(fh)]
+
+
+# ----------------------------------------------------------------------------- generate (Stack)
+
+
+def assemble_sets(n_set: int, baseline_pool, treated_pool, line_of_base: np.ndarray, line_of_treated: np.ndarray,
+                  held_out: np.ndarray, rng: np.random.Generator):
+    """One in-context set per held-out line, in the model's training order:
+    prompt = n_set/4 baseline cells of the training lines, context = n_set/2 treated cells of the
+    training lines, query = n_set/4 baseline cells of the held-out line. Returns the stacked CSR
+    (len(held_out) * n_set rows), the query rows of each set (indices into baseline_pool), and
+    the three block sizes."""
+    from scipy import sparse
+
+    n_query = n_set // 4
+    n_prompt = n_set // 4
+    n_context = n_set - n_query - n_prompt
+    blocks, query_rows = [], []
+    for i in held_out:
+        own = np.flatnonzero(line_of_base == i)[:n_query]
+        prompt = rng.choice(np.flatnonzero(line_of_base != i), n_prompt, replace=False)
+        context = rng.choice(np.flatnonzero(line_of_treated != i), n_context, replace=False)
+        blocks.append(sparse.vstack([baseline_pool[prompt], treated_pool[context], baseline_pool[own]]))
+        query_rows.append(own)
+    return sparse.vstack(blocks).tocsr(), np.stack(query_rows), n_query, n_prompt, n_context
+
+
+def generate(args: argparse.Namespace) -> None:
     import anndata as ad
+    from stack.model_loading import load_model_from_checkpoint
 
-    path = args.cache / f"synthetic_cells_k{k}.h5ad"
-    if path.exists():
-        return path
     t = np.load(args.cache / "tensors.npz", allow_pickle=True)
-    X, line_of = synthetic_cells(t["E"], k, STACK_LIBRARY, STACK_SEED)
-    adata = ad.AnnData(X=X)
-    adata.obs["line"] = np.asarray(t["lines"])[line_of]
-    adata.obs["draw"] = np.tile(np.arange(k), len(t["lines"]))
-    adata.obs_names = [f"{l}_{d}" for l, d in zip(adata.obs["line"], adata.obs["draw"])]
-    adata.var_names = list(t["genes"])
-    adata.var["feature_name"] = list(t["genes"])
-    adata.write_h5ad(path)
-    log(f"wrote {path.name}: {adata.n_obs} synthetic cells ({k} per line, {STACK_LIBRARY} counts each), "
-        f"median genes detected per cell {int(np.median((X > 0).sum(1)))}")
-    return path
-
-
-def embed(args: argparse.Namespace) -> None:
-    import os
-
-    from heldout_embed import load_stack_model  # rung 1 branch: strict load, head-stripped on retry
-
-    for model_name, env_key in STACK_VERSIONS.items():
-        out = args.cache / f"emb_{model_name}.npy"
+    E, Y, lines, drugs, genes = t["E"], t["Y"], t["lines"], t["drugs"], pd.Index(t["genes"])
+    n_l, n_d = len(lines), len(drugs)
+    stack_genes = load_stack_genes(args.genelist)
+    if stack_genes is None:
+        raise FileNotFoundError(f"gene list {args.genelist} is required to generate")
+    stack_in_ours = genes.get_indexer(stack_genes)  # -1 where Stack's gene is not in the table
+    todo = [m for m in GEN_MODELS if args.gen_model in (None, m)]
+    for model_name in todo:
+        out = args.cache / f"gen_{model_name}.npy"
         if out.exists():
-            log(f"{model_name}: embedding present, skipping")
+            log(f"{model_name}: generation present, skipping")
             continue
-        ckpt = os.environ.get(env_key)
+        ckpt = os.environ.get(GEN_MODELS[model_name])
         if not ckpt:
-            log(f"{model_name}: {env_key} unset, skipping")
+            log(f"{model_name}: {GEN_MODELS[model_name]} unset, skipping")
             continue
-        try:
-            model = load_stack_model(Path(ckpt), args.cache)
-            k = int(getattr(model, "n_cells", 128))  # one attention set per line
-            h5ad = write_synthetic_h5ad(args, k)
-            emb, _ = model.get_latent_representation(
-                adata_path=str(h5ad), genelist_path=str(args.genelist), gene_name_col="feature_name",
-                batch_size=8, show_progress=False, num_workers=0, random_state=STACK_SEED,
+        model = load_model_from_checkpoint(ckpt, model_class="ICL_FinetunedModel")
+        n_set = int(model.n_cells)
+        rng = np.random.default_rng(STACK_SEED)
+        base_pool = draw_cells(profile_probabilities(E), n_set // 4, rng)  # n_set/4 baseline cells per line
+        line_of_base = np.repeat(np.arange(n_l), n_set // 4)
+        base_mean = np.stack([np.asarray(base_pool[line_of_base == i].mean(0)).ravel() for i in range(n_l)])  # (line, gene)
+        k_treated = int(np.ceil((n_set // 2) / (n_l - 1))) + 1
+        pred_lfc = np.full((n_l, n_d, len(stack_genes)), np.nan, dtype=np.float32)
+        log(f"{model_name}: set size {n_set}; prompt {n_set // 4} / context {n_set - 2 * (n_set // 4)} / query {n_set // 4}; "
+            f"{k_treated} treated cells drawn per training line per drug")
+        for j in range(n_d):
+            t0 = time.time()
+            treated_pool = draw_cells(profile_probabilities(E, Y[:, j, :]), k_treated, rng)
+            line_of_treated = np.repeat(np.arange(n_l), k_treated)
+            X, query_rows, n_query, n_prompt, n_context = assemble_sets(
+                n_set, base_pool, treated_pool, line_of_base, line_of_treated, np.arange(n_l), rng)
+            adata = ad.AnnData(X=X)
+            adata.var_names = list(genes)
+            adata.var["feature_name"] = list(genes)
+            mean_pred, _, _, _ = model.get_prediction(
+                adata, str(args.genelist), gene_name_col="feature_name", mask_rate=0.0,
+                cell_ratio=n_prompt / n_set, context_ratio=n_context / n_set,
+                batch_size=args.gen_batch, num_workers=0, random_seed=STACK_SEED, show_progress=False,
             )
-            cells = np.asarray(emb, dtype=np.float32)
-            n_lines = cells.shape[0] // k
-            per_line = cells.reshape(n_lines, k, -1)
-            emb_line = per_line.mean(1)
-            unit = per_line / np.linalg.norm(per_line, axis=2, keepdims=True)
-            within = (unit * (emb_line / np.linalg.norm(emb_line, axis=1, keepdims=True))[:, None, :]).sum(2).mean()
-            np.save(out, emb_line)
-            log(f"{model_name}: embedded {cells.shape[0]} cells -> {n_lines} lines x {emb_line.shape[1]}; "
-                f"mean cosine of a cell to its line's mean embedding {within:.3f}")
-        except Exception as exc:  # a failed checkpoint costs its column, not the run
-            log(f"{model_name}: FAILED ({type(exc).__name__}: {exc}); column will be absent")
-        finally:
-            import gc, torch  # noqa: E401
-
-            gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            mean_pred = np.asarray(mean_pred, dtype=np.float32).reshape(n_l, n_set, -1)
+            gen = mean_pred[:, n_set - n_query:, :].mean(1)  # (line, stack gene): generated treated counts per 10^4
+            base = np.where(stack_in_ours >= 0, base_mean[:, np.maximum(stack_in_ours, 0)], np.nan)
+            pred_lfc[:, j, :] = np.log2((gen + EPS_COUNTS) / (base + EPS_COUNTS))
+            log(f"{model_name}: drug {j + 1}/{n_d} {drugs[j]} ({time.time() - t0:.0f}s)")
+        np.save(out, pred_lfc)
+        log(f"{model_name}: wrote {out.name} {pred_lfc.shape}")
+        del model
 
 
 # ----------------------------------------------------------------------------- score
@@ -268,97 +317,125 @@ def masked_pearson(P: np.ndarray, O: np.ndarray, M: np.ndarray) -> tuple[np.ndar
     return r, n
 
 
-def representations(E: np.ndarray, cache: Path) -> dict[str, np.ndarray]:
-    """Line features: log1p CPM for knn, ten components for each linear model."""
-    from sklearn.decomposition import NMF, PCA
-
-    logcpm = np.log1p(E / np.maximum(E.sum(1, keepdims=True), 1) * 1e6)
-    keep = logcpm.std(0) > 0
-    Z = (logcpm[:, keep] - logcpm[:, keep].mean(0)) / logcpm[:, keep].std(0)
-    reps: dict[str, np.ndarray] = {"knn": Z}
-    reps["pca"] = PCA(N_COMPONENTS, random_state=0).fit_transform(Z)
-    scaled = logcpm[:, keep] / logcpm[:, keep].max(0)  # per-gene scaling, the non-negative analogue of standardising
-    reps["nmf"] = NMF(N_COMPONENTS, init="nndsvda", max_iter=1000, random_state=0).fit_transform(scaled)
-    for name in STACK_VERSIONS:
-        path = cache / f"emb_{name}.npy"
-        if path.exists():
-            emb = np.load(path)
-            reps[name] = PCA(min(N_COMPONENTS, emb.shape[1]), random_state=0).fit_transform(emb) if emb.shape[1] > N_COMPONENTS else emb
-    return reps
+def log_cpm(profiles: np.ndarray) -> np.ndarray:
+    return np.log1p(profiles / np.maximum(profiles.sum(-1, keepdims=True), 1e-12) * 1e6)
 
 
-def neighbours(Z: np.ndarray, i: int, train: np.ndarray) -> np.ndarray:
-    c = np.corrcoef(Z[[i], :], Z[train])[0, 1:]
-    return train[np.argsort(-c)[:K_NEIGHBOURS]]
+class LatentShift:
+    """Encode -> shift -> decode with a linear decomposition of the baselines (PCA or NMF).
+
+    ``encode`` maps log-expression profiles to k coordinates; ``decode_shift`` maps a latent
+    shift back to a per-gene change in log expression. Both are linear in the components."""
+
+    def __init__(self, kind: str, L: np.ndarray, keep: np.ndarray):
+        from sklearn.decomposition import NMF, PCA
+
+        self.kind, self.keep = kind, keep
+        X = L[:, keep]
+        if kind == "pca":
+            self.mu, self.sd = X.mean(0), X.std(0)
+            self.model = PCA(N_COMPONENTS, random_state=0).fit((X - self.mu) / self.sd)
+            self.components = self.model.components_ * self.sd  # back to log units
+        else:
+            self.scale = X.max(0)  # per-gene scaling, the non-negative analogue of standardising
+            self.model = NMF(N_COMPONENTS, init="nndsvda", max_iter=1000, random_state=0).fit(X / self.scale)
+            self.components = self.model.components_ * self.scale
+
+    def encode(self, L: np.ndarray) -> np.ndarray:
+        X = L.reshape(-1, L.shape[-1])[:, self.keep]
+        if self.kind == "pca":
+            z = self.model.transform((X - self.mu) / self.sd)
+        else:
+            z = self.model.transform(np.clip(X / self.scale, 0, None))
+        return z.reshape(*L.shape[:-1], N_COMPONENTS)
+
+    def decode_shift(self, dz: np.ndarray, n_genes: int) -> np.ndarray:
+        out = np.full((*dz.shape[:-1], n_genes), np.nan, dtype=np.float32)
+        out[..., self.keep] = dz @ self.components
+        return out
 
 
-def ols_predict(X: np.ndarray, i: int, train: np.ndarray, B_tr: np.ndarray) -> np.ndarray:
-    """Departure at line i from OLS of the training departures on centred features."""
-    mu = X[train].mean(0)
-    Xc = X[train] - mu
-    beta = np.linalg.pinv(Xc) @ np.nan_to_num(B_tr.reshape(len(train), -1))
-    return ((X[i] - mu) @ beta).reshape(B_tr.shape[1:])
-
-
-def score(args: argparse.Namespace, noise_drug: pd.DataFrame, noise_line: pd.DataFrame) -> None:
+def score(args: argparse.Namespace, noise_drug: pd.DataFrame) -> None:
     t = np.load(args.cache / "tensors.npz", allow_pickle=True)
     Y, D, E, H0, H1 = t["Y"], t["D"], t["E"], t["H0"], t["H1"]
-    lines, drugs = pd.Index(t["lines"]), pd.Index(t["drugs"])
-    n_l = len(lines)
-    reps = representations(E, args.cache)
-    models = [m for m in MODELS if m == "mean" or m in reps]
+    lines, drugs, genes = pd.Index(t["lines"]), pd.Index(t["drugs"]), pd.Index(t["genes"])
+    n_l, n_d, n_g = Y.shape
+
+    stack_genes = load_stack_genes(args.genelist)
+    in_stack = np.ones(n_g, dtype=bool) if stack_genes is None else np.isin(genes, stack_genes)
+    log(f"panel restricted to {int(in_stack.sum())} of {n_g} genes present in Stack's list")
+
+    # Stack's generated fold changes, mapped from its gene order into the table's
+    gen: dict[str, np.ndarray] = {}
+    for m in GEN_MODELS:
+        path = args.cache / f"gen_{m}.npy"
+        if path.exists() and stack_genes is not None:
+            arr = np.load(path)
+            full = np.full((n_l, n_d, n_g), np.nan, dtype=np.float32)
+            idx = genes.get_indexer(stack_genes)
+            full[:, :, idx[idx >= 0]] = arr[:, :, idx >= 0]
+            gen[m] = full
+    models = [m for m in MODELS if not m.startswith("stack") or m.replace("_adj", "") in gen]
     log(f"scoring {len(models)} models: {models}")
+
+    # baselines and treated profiles in log CPM; latent coordinates of both, once
+    L = log_cpm(E)
+    keep = L.std(0) > 0
+    Z = (L[:, keep] - L[:, keep].mean(0)) / L[:, keep].std(0)  # for knn
+    L_T = log_cpm(E[:, None, :] * np.exp2(np.nan_to_num(Y, nan=0.0)))  # (line, drug, gene)
+    latent = {k: LatentShift(k, L, keep) for k in ("pca", "nmf")}
+    z = {k: v.encode(L) for k, v in latent.items()}  # (line, k)
+    t_lat = {k: v.encode(L_T) for k, v in latent.items()}  # (line, drug, k)
+    log("latent coordinates encoded")
 
     rows: list[pd.DataFrame] = []
     for i in range(n_l):
         if not np.isfinite(Y[i]).any():
             continue
         train = np.setdiff1d(np.arange(n_l), [i])
-        obs = Y[i]  # (drug, gene)
-        nbrs = neighbours(reps["knn"], i, train)
-
-        # --- scheme line: l* out, baseline = drug mean over training lines
+        obs = Y[i]
+        panel = D[i] & in_stack[None, :]
         with np.errstate(invalid="ignore"):
-            base_line = np.nanmean(Y[train], axis=0)
-        B_tr = Y[train] - base_line
-        panel = D[i]  # the held-out condition's own DE genes
-        preds = {"mean": np.zeros_like(base_line)}
-        preds["knn"] = np.nanmean(B_tr[np.searchsorted(train, nbrs)], axis=0)
+            mean_d = np.nanmean(Y[train], axis=0)
+        preds = {"mean": mean_d}
+        c = np.corrcoef(Z[[i], :], Z[train])[0, 1:]
+        preds["knn"] = np.nanmean(Y[train[np.argsort(-c)[:K_NEIGHBOURS]]], axis=0)
+        for k in ("pca", "nmf"):
+            X = np.column_stack([np.ones(len(train)), z[k][train]])  # (48, 1+k), the same for every drug
+            beta = np.linalg.pinv(X) @ t_lat[k][train].reshape(len(train), -1)  # -> (1+k, drug*k)
+            t_hat = (np.concatenate([[1.0], z[k][i]]) @ beta).reshape(n_d, N_COMPONENTS)
+            shift = t_hat - z[k][i]  # (drug, k): the held-out line's predicted latent shift
+            fitted_shift = (X @ beta).reshape(len(train), n_d, N_COMPONENTS) - z[k][train][:, None, :]
+            preds[k] = latent[k].decode_shift(shift, n_g)
+            preds[k + "_adj"] = mean_d + latent[k].decode_shift(shift - fitted_shift.mean(0), n_g)
+        for m, arr in gen.items():
+            preds[m] = arr[i]
+            with np.errstate(invalid="ignore"):
+                preds[m + "_adj"] = mean_d + (arr[i] - np.nanmean(arr[train], axis=0))
         for m in models:
-            if m not in ("mean", "knn"):
-                preds[m] = ols_predict(reps[m], i, train, B_tr)
-        for m in models:
-            r, n = masked_pearson(base_line + preds[m], obs, panel)
-            rows.append(pd.DataFrame({"scheme": "line", "line": lines[i], "drug": drugs, "model": m, "r": r, "n_panel": n}))
+            r, n = masked_pearson(preds[m], obs, panel)
+            rows.append(pd.DataFrame({"line": lines[i], "drug": drugs, "model": m, "r": r, "n_panel": n}))
         r, n = masked_pearson(H0[i], H1[i], panel)
-        rows.append(pd.DataFrame({"scheme": "line", "line": lines[i], "drug": drugs, "model": CEILING, "r": r, "n_panel": n}))
-
+        rows.append(pd.DataFrame({"line": lines[i], "drug": drugs, "model": CEILING, "r": r, "n_panel": n}))
         log(f"fold {i + 1}/{n_l} {lines[i]}")
 
     per = pd.concat(rows, ignore_index=True).dropna(subset=["r"])
     per.to_csv(args.out / "rung1_per_condition.csv", index=False)
 
-    def table(scheme: str, by: str, noise: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
-        sub = per[per["scheme"] == scheme]
-        other = "drug" if by == "line" else "line"
-        wide = sub.pivot_table(index=by, columns="model", values="r", aggfunc="mean")
-        ceiling = wide[[CEILING]]
-        wide = wide[cols]
-        wide.columns = [f"r_{c}" for c in wide.columns]
-        meta = sub[sub["model"] == "mean"].groupby(by).agg(**{f"n_{other}s": (other, "nunique")}, n_panel_median=("n_panel", "median"))
-        out = meta.join(noise[["noise_de"]]).join(ceiling).join(wide)
-        return out.sort_values("noise_de", ascending=False).round(4)
+    wide = per.pivot_table(index="drug", columns="model", values="r", aggfunc="mean")
+    table = per[per["model"] == "mean"].groupby("drug").agg(n_lines=("line", "nunique"), n_panel_median=("n_panel", "median"))
+    table = table.join(noise_drug[["noise_de"]]).join(wide[[CEILING]])
+    table = table.join(wide[models].rename(columns=lambda m: f"r_{m}"))
+    table.sort_values("noise_de", ascending=False).round(4).to_csv(args.out / "rung1_line_per_drug.csv")
 
-    table("line", "drug", noise_drug, models).to_csv(args.out / "rung1_line_per_drug.csv")
-
-    summary = per.groupby(["scheme", "model"])["r"].agg(["mean", "median", "count"])
-    split_half = float(summary["mean"].xs(CEILING, level="model").iloc[0])
+    summary = per.groupby("model")["r"].agg(["mean", "median", "count"])
+    split_half = float(summary.loc[CEILING, "mean"])
     attainable = np.sqrt(2 * split_half / (1 + split_half))  # sqrt of Y's Spearman-Brown reliability
     summary["attainable_bound"] = attainable
     summary["frac_attainable"] = summary["mean"] / attainable
-    summary = summary.round(4)
+    summary = summary.reindex([CEILING] + models).round(4)
     summary.to_csv(args.out / "rung1_summary.csv")
-    log("summary (mean r per scheme x model):\n" + summary.to_string())
+    log("summary (mean r over held-out conditions):\n" + summary.to_string())
 
 
 # ----------------------------------------------------------------------------- main
@@ -366,13 +443,15 @@ def score(args: argparse.Namespace, noise_drug: pd.DataFrame, noise_line: pd.Dat
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--stage", choices=("build", "embed", "score", "all"), default="all")
+    ap.add_argument("--stage", choices=("build", "generate", "score", "all"), default="all")
     ap.add_argument("--rung0-cache", type=Path, required=True, help="rung 0 cache with frame_*.parquet")
     ap.add_argument("--tahoe-dir", type=Path, required=True, help="Tahoe DE shards on scratch")
     ap.add_argument("--per-pair", type=Path, default=Path("results/rung0-assay-reliability/rung0_per_pair_r.csv"))
     ap.add_argument("--genelist", type=Path, default=Path("stack-large/basecount_1000per_15000max.pkl"))
-    ap.add_argument("--cache", type=Path, required=True, help="where tensors, h5ad and embeddings go")
+    ap.add_argument("--cache", type=Path, required=True, help="where tensors and generations go")
     ap.add_argument("--out", type=Path, required=True, help="where the tables go")
+    ap.add_argument("--gen-model", choices=tuple(GEN_MODELS), default=None, help="generate for one checkpoint only")
+    ap.add_argument("--gen-batch", type=int, default=2, help="in-context sets per forward pass")
     ap.add_argument("--shard-stride", type=int, default=3)
     ap.add_argument("--duckdb-memory", default="40GB")
     ap.add_argument("--duckdb-threads", type=int, default=8)
@@ -380,16 +459,17 @@ def main() -> None:
     args.cache.mkdir(parents=True, exist_ok=True)
     args.out.mkdir(parents=True, exist_ok=True)
 
-    noise_drug, noise_line = rung0_tables(args.per_pair, args.out)
+    noise_drug, _ = rung0_tables(args.per_pair, args.out)
     if args.stage in ("build", "all"):
         build(args)
-    if args.stage in ("embed", "all"):
-        embed(args)
+    if args.stage in ("generate", "all"):
+        generate(args)
     if args.stage in ("score", "all"):
-        score(args, noise_drug, noise_line)
-    (args.out / "run.json").write_text(json.dumps({"stage": args.stage, "dose": DOSE, "alpha": ALPHA, "k": K_NEIGHBOURS,
-                                                   "n_components": N_COMPONENTS, "shard_stride": args.shard_stride, "stack_library": STACK_LIBRARY,
-                                                   "finished": time.strftime("%Y-%m-%d %H:%M:%S")}, indent=2))
+        score(args, noise_drug)
+    (args.out / "run.json").write_text(json.dumps({
+        "stage": args.stage, "dose": DOSE, "alpha": ALPHA, "k": K_NEIGHBOURS, "n_components": N_COMPONENTS,
+        "shard_stride": args.shard_stride, "stack_library": STACK_LIBRARY, "eps_counts": EPS_COUNTS,
+        "finished": time.strftime("%Y-%m-%d %H:%M:%S")}, indent=2))
 
 
 if __name__ == "__main__":
