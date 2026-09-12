@@ -533,18 +533,140 @@ will confirm, and the evidence the delta must record.
 
 ## Fix wave
 
-*Empty — the controller dispatches the fix wave from the findings above.* Its seven drift items are
-D26, D108, D113, D131, S6, P17 and P18; the three reverse-direction findings are R1–R3; observation
-O1 and the two rulings are recorded for the controller's judgment rather than as defects requiring a
-fix. Each item's disposition (fixed, recorded as a decision, or ruled not a defect with the
-reasoning) and the commits that carried it belong in this section.
+**Dated** 2026-09-11. Four commits on top of the audit's `89bb680`: **b512bc2** (measurement),
+**b4e6c39** (battery), **7cc3dc6** (the notebook generators, ruling 44), **73806e1** (documents).
+HEAD is `73806e1`. Dispositions below; the re-audit that follows re-checks only the seven DRIFT
+items, per the cap.
+
+| Item | Disposition | Commit |
+|---|---|---|
+| D26 | **Fixed in the record, toward the file that is actually loaded.** `leakage.py`'s `STACK_CHECKPOINTS` and design §4 both now say `finetuned-epoch=5-val_loss=6.1078.ckpt`, matching `heldout_embed.py` and `CKPT_DRUG`. A dated `decisions.md` entry records it, on the ground that a provenance record naming a file that is not on the cluster pins nothing | `73806e1` |
+| D108 | **Fixed in the document.** Design §9's stage table gains "0. Grid, ceiling and line crosswalk", and stages 1 and 2 now show they wait for it | `73806e1` |
+| D113 | **Fixed in the document, deliberately not in the chain.** Stage 5's "Waits for" now reads "nothing, unless the operator passes `--after <job id>`". A dated entry gives the reason the chain stays as it is: the two stages are submitted days apart, so at data-submission time there is no fit job to attach to | `73806e1` |
+| D131 | **Fixed per ruling 45** — reconciled to design §1–§7 (what gate 1 approved), not to `decisions.md`'s originally proposed text. A dated entry records field by field how the applied text had differed and why the design won, including the one applied change that was kept (the `Tasks` line, which this audit had verdicted ALIGNED at S10) | `73806e1` |
+| S6 | **Fixed per ruling 46, in the sentence rather than the experiment.** Adding the missing comparisons would enlarge the Holm families of an approved design; the SPEC sentence now states design §7's actual structure. A dated entry records that neither the old SPEC text nor the proposed text matched §7 | `73806e1` |
+| P17 | **Fixed by naming tests that exist, one of them new.** Invariant 2 now names `test_scoreable_boundary_49_versus_50_responding_genes`, `test_excluded_pairs_are_false_even_when_otherwise_scoreable`, and the newly written run-wide `test_the_excluded_pair_is_scored_for_no_model` | `73806e1` (plan.md), `b512bc2`/`73806e1` (the test) |
+| P18 | **Fixed by writing the test the plan already named.** `test_descriptions_read_only_dmso_cells` now exists | `b512bc2` |
+
+Beyond the seven, the wave also took up findings this audit raised outside the claim tables:
+
+| Item | Disposition | Commit |
+|---|---|---|
+| R1, R2, R3 | **Fixed.** All three files under no claim entered plan.md's file map: `heldout_fetch_metadata.py`, `heldout_smoke_import.py` and `heldout/records.py`, each with the responsibility it carries | `73806e1` |
+| O1 | **Fixed.** The "answers are scanned, not cached" entry moved from `decisions.md`'s `## plan.md` heading to `## design.md (execution)`, the document whose text it contradicts, with a line saying why it moved. Nothing about the decision changed | `73806e1` |
+| Audit ruling 1 (ruling 44) | **Fixed.** Both generators committed to `scripts/`, entered in the file map, recorded in `decisions.md`, and pinned by `tests/test_notebook_generators.py` | `7cc3dc6` |
+| Audit ruling 2 (ruling 47) | **Fixed.** `is_design_grid` renamed `is_at_least_design_size`; logic unchanged | `b4e6c39` |
 
 ## Re-audit
 
-*Empty — the re-audit follows the fix wave.* Per `docs/audit.md`'s cap it re-checks **only** the
-seven items verdicted DRIFT; it does not re-enumerate the design, and there is no confirmation pass
-of a confirmation pass. **The audit is not passed until the re-audit says so.**
+**Date** 2026-09-11. **Commit re-audited** `73806e1`. **Auditor** the same fresh reader.
+**Scope** the **seven items verdicted DRIFT** and nothing else. Per `docs/audit.md`'s cap this pass
+does not re-enumerate the design and does not revisit anything verdicted ALIGNED,
+DEVIATION-RECORDED or PENDING-RUN; there is no confirmation pass of a confirmation pass.
 
-Work added after this audit passes — in particular everything the run produces — gets an **audit
-delta** under its own dated heading in this file, over the new surface only, working from the
-PENDING-RUN checklist above.
+**What was re-run.** The named tests behind the two invariant items, the battery and job tests, the
+notebook-generator tests, and project rule 2 (plan.md's invariants were rewritten, which is a
+non-additive task-document edit):
+
+```
+$ uv run pytest tests/test_notebook_generators.py tests/test_rung1_jobs.py \
+                tests/test_verify_rung1.py -W error        108 passed, 9 skipped
+$ uv run pytest tests/test_heldout_cells.py::test_descriptions_read_only_dmso_cells \
+      tests/test_heldout_answers.py::test_scoreable_boundary_49_versus_50_responding_genes \
+      tests/test_heldout_answers.py::test_excluded_pairs_are_false_even_when_otherwise_scoreable
+                                                            3 passed
+$ uv run pytest tests/test_heldout_pipeline.py::test_the_excluded_pair_is_scored_for_no_model
+                                                            1 passed (84 s)
+$ uv run pytest tests/test_project_rules.py -k rule_02      2 passed, 7 deselected
+```
+
+<sub>A first attempt at the rule‑2 run was wrapped in `timeout`, which does not exist on macOS; the
+command failed without running pytest and the shell reported the exit status of `tail`. It was
+re-run unwrapped, and the output above is from that run.</sub>
+
+| Item | Re-audit verdict | Evidence |
+|---|---|---|
+| D26 | **ALIGNED** | All five places that name the drug checkpoint now agree on `finetuned-epoch=5-val_loss=6.1078.ckpt`: `leakage.py:45`, `design.md:53`, `heldout_embed.py:41`, `rung1_env.sh:39` (`CKPT_DRUG`), and `test_heldout_pipeline.py:351`, which pins it. Recorded in `decisions.md` under `## design.md (execution)`. The file the cluster actually opens is confirmed only by the run (checklist PR-4), and the entry says so |
+| D108 | **ALIGNED** | `design.md:195` now carries "0. Grid, ceiling and line crosswalk \| one job; both data stages read the `rung1_grid.json` it writes \| —", and `:196-197` show stages 1 and 2 waiting for 0 — matching `submit_rung1_chain.sh:140,147,160`, where both data stages take `--dependency=afterok:$GRID` |
+| D113 | **ALIGNED** | `design.md:200` now reads "nothing, unless the operator passes `--after <job id>` (`decisions.md`, 2026-09-11)", which is what `submit_rung1_chain.sh:25-26` and `:98-100` implement. The document no longer claims a dependency the chain does not create, and the dated entry explains why the chain stays that way |
+| D131 | **ALIGNED** | `git diff 89bb680..HEAD -- docs/SPEC.md` shows *Adds*, *Measure* and *Why it matters* restored to `decisions.md`'s proposed wording (including the label *Why it matters*, which the applied text had renamed), *Tasks* kept, and *Reports* rewritten under ruling 46. The dated entry walks all six fields and says which way each went and why |
+| S6 | **ALIGNED** | The SPEC sentence now describes design §7's actual structure, and I checked it clause by clause against `__init__.py:81-91` and `heldout_redraws.py:113-126`: Stack base against the drug average (LOLO) and chemistry only (LODO); Stack base against expression, PCA, NMF, and nearest lines under LOLO only; drug fine-tune against the cytokine release; and each description against its own stand-in. Every clause holds, and no comparison is promised that `contrasts()` does not compute. See the note below on one loose word |
+| P17 | **ALIGNED** | Invariant 2 (`plan.md:92-95`) names three tests, all of which exist and pass: the two boundary tests in `tests/test_heldout_answers.py` and the new run-wide `tests/test_heldout_pipeline.py:754`, which asserts the excluded pair appears in no model's scores in either scheme on either gene set, with `assert len(scores) > 0` guarding against a vacuous pass. `test_scoreable_pairs_do_not_depend_on_the_model` no longer appears in any document but this audit's own record of the original finding |
+| P18 | **ALIGNED** | `tests/test_heldout_cells.py:603` now defines `test_descriptions_read_only_dmso_cells`, and it is not vacuous: `:662` asserts the line's description equals the pseudobulk of its DMSO cells alone (`rtol=1e-12`), and `:663-666` then asserts that folding the treated cell in **would** have changed it — so the test cannot pass by measuring nothing. The fixture deliberately carries a treated cell and a non-grid line, and `:645` checks the non-grid line was not described |
+
+**Verifying ruling 44's asserted part.** The controller flagged that the generators were
+*reconstructed*, so "they regenerate the notebooks byte-for-byte" was a claim that could be asserted
+rather than true. I checked it independently rather than trusting `tests/test_notebook_generators.py`
+— I ran both generators to a scratch directory and compared bytes:
+
+```
+verify.ipynb   committed=49752 bytes sha=7ed68fbea291727f
+               generated=49752 bytes sha=7ed68fbea291727f    IDENTICAL
+summary.ipynb  committed=37249 bytes sha=a01073e5c6af4497
+               generated=37249 bytes sha=a01073e5c6af4497    IDENTICAL
+```
+
+Both are tracked (`git ls-files scripts/make_verify_nb.py scripts/make_summary_nb.py`), both are in
+plan.md's file map, and `decisions.md` states plainly that they were reconstructed rather than
+moved. The test itself compares bytes rather than parsed cells, and separately pins that the
+generated notebooks carry no outputs and that `--out` works. **The claim is true**, and the
+reproducibility gap my first ruling identified is closed: anyone can now regenerate either notebook,
+and a hand-edit that bypasses the generator fails the suite.
+
+**Note on S6's one loose word.** The new sentence groups "nearest lines" among "the other line
+descriptions", then says "every description also goes against a random stand-in". Nearest lines has
+no stand-in — `stand_in_contrasts` filters on `spec.kind == "ridge"` and `MODELS` has no
+`random_nearest_lines`. Read in the design's own vocabulary the sentence is correct, because §4's
+table defines the six *descriptions* and §5 lists nearest lines as a *model*, so "every description"
+denotes the six, each of which does face a stand-in. I record the ambiguity rather than reopen the
+item: the defect S6 named — a comparison promised that the run does not compute — is gone, and this
+is a wording preference for a later documentation pass, not a claim the tree contradicts.
+
+**Note on ruling 47.** `is_at_least_design_size` (`verify_rung1.py:266-280`) keeps the predicate
+exactly (`not (lines < DESIGN_LINES and drugs < DESIGN_DRUGS)`) and the docstring now states the De
+Morgan form, the deliberate asymmetry, and that five checks across four call sites and the exit
+status depend on it. Every call site moved with it; `is_design_grid` survives nowhere in `scripts/`,
+`src/`, `tests/` or `docs/` except this audit's own record of the original finding, which is
+historical and correct as written. My Ruling 2 above suggested the name `is_at_least_design_scale`;
+the implementer chose `is_at_least_design_size`, which is the same thing.
+
+**On `.superpowers/sdd/plan/global-constraints.md:85` — I accept the controller's ruling, with one
+caveat recorded.** The facts check out: `.superpowers/sdd/.gitignore` is a single `*`,
+`git check-ignore -v` confirms the file is ignored by that line, and `git ls-files .superpowers/`
+returns nothing, so no part of that tree is tracked. The authoritative statement of invariant 6 is
+`plan.md:100-105`, which is tracked, correct, and has been since `7ce7660`. A reader of a fresh
+clone therefore never encounters the wrong statement — which is the outcome my audit exists to
+protect, so the correction being absent from git costs that reader nothing.
+
+The caveat is the opposite risk, and it is why I record this rather than simply agreeing. The file
+is not inert: `plan.md:3` directs agentic workers to the superpowers workflow, and the task brief
+told this task's workers to read `global-constraints.md` as binding. A binding constraint document
+that is untracked cannot be reviewed, cannot be diffed, and does not carry its correction forward if
+the workspace is ever recreated — so the same reversed statement can return silently and no test
+will catch it. That is a workspace-tooling concern rather than a rung 1 defect, and it is out of
+this audit's scope; I note it so a future reader knows the correction was made on disk on
+2026-09-11 and is not in the history.
+
+### Verdict
+
+**Every one of the seven drift items is fixed. The audit is PASSED.**
+
+The clause tables above are left as they were written — they are the record of what the audit found
+at `55adfb7`, and editing them would erase the findings. For those seven claims the verdicts in this
+section supersede them, so the standing tally at `73806e1` is:
+
+| Verdict | Count |
+|---|---|
+| ALIGNED | 187 |
+| DEVIATION-RECORDED | 6 |
+| DRIFT | **0** |
+| PENDING-RUN | **4** |
+| **Total** | **197** |
+
+**What is still open, and is not a defect.** The run has not happened: D107, P36, P47 and P48 remain
+PENDING-RUN, and the 55 claims verdicted on their code still await the artifact that realizes them.
+Nothing may be promoted on the strength of this pass. When Alpine's storage returns and the chain
+completes, that work gets an **audit delta** under its own dated heading in this file — the same
+procedure over the new surface only, with the same fresh-reader confirmation, working from the
+16-entry [PENDING-RUN artifact checklist](#pending-run-the-artifact-checklist) rather than
+re-enumerating the design.
