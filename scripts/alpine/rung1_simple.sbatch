@@ -12,7 +12,7 @@
 #SBATCH --error=logs/%x-%j.out
 #
 # Rung 0 noise per drug / per line and rung 1 held-out prediction, five tables, one job:
-# duckdb over the rung 0 frame cache and 30 raw shards, three Stack embeddings of the 50
+# duckdb over the rung 0 frame cache and 100 raw shards strided across the set, three Stack embeddings of the 50
 # lines' baseline, then the fold loop. Results land on scratch; pull the CSVs from
 # $OUT_DIR, nothing is committed by this job.
 set -euo pipefail

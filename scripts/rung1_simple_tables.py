@@ -28,7 +28,7 @@ Score = Pearson r between predicted and observed Y on the panel, per held-out co
 then averaged per drug (scheme line) or per line (the drug schemes).
 
 Baseline expression per line is the mean DESeq2 ``baseMean`` over that line's contrasts in a
-subset of the raw shards -- treated and vehicle pseudobulks averaged over many drugs, which
+strided subset of the raw shards -- treated and vehicle pseudobulks averaged over many drugs, which
 is the line's expression level on the screen's own platform.
 
 Stages: build (duckdb -> tensors + a baseline h5ad), embed (three Stack checkpoints, each
@@ -119,7 +119,9 @@ def build(args: argparse.Namespace) -> None:
     del de
 
     shards = sorted(str(p) for p in args.tahoe_dir.rglob("*.parquet") if DE_SUBSTRING in str(p))
-    shards = shards[: args.n_shards]
+    # The shards are laid out by line (30 consecutive shards held 2 lines, job 32435735), so
+    # the subset is strided across the whole set rather than taken from the front.
+    shards = shards[:: max(1, len(shards) // args.n_shards)][: args.n_shards]
     if not shards:
         raise FileNotFoundError(f"no DE shards under {args.tahoe_dir}")
     log(f"baseline expression: avg(baseMean) per (line, gene) over {len(shards)} shards")
@@ -321,7 +323,7 @@ def main() -> None:
     ap.add_argument("--genelist", type=Path, default=Path("stack-large/basecount_1000per_15000max.pkl"))
     ap.add_argument("--cache", type=Path, required=True, help="where tensors, h5ad and embeddings go")
     ap.add_argument("--out", type=Path, required=True, help="where the tables go")
-    ap.add_argument("--n-shards", type=int, default=30)
+    ap.add_argument("--n-shards", type=int, default=100)
     ap.add_argument("--duckdb-memory", default="40GB")
     ap.add_argument("--duckdb-threads", type=int, default=8)
     args = ap.parse_args()
