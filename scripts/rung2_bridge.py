@@ -5,9 +5,10 @@ probabilities and cells are drawn as multinomial(library, p). This script tests 
 putting real Tahoe cells of the same lines through the same model and asking whether each
 line's synthetic population sits with its own real population.
 
-  cells   Stream Tahoe-100M's raw expression shards and keep the first 256 DMSO_TF (vehicle)
-          cells of each line in the rung 1 block, over the rung 1 gene table. Written as
-          real_dmso.h5ad. Public data; no token.
+  cells   Real DMSO_TF (vehicle) cells of each rung 1 line, 256 per line, pooled from the
+          per-drug context shards the 2026-08 generation work built from Tahoe's raw cells
+          (context_by_drug/*.h5ad, already on the Alpine checkout; over Stack's gene panel).
+          Written as real_dmso.h5ad. No download.
   embed   For each line: real half A (128 cells, even positions), real half B (128, odd), and
           128 synthetic cells drawn from the line's baseline profile with the library sizes of
           its real cells, so library size cannot separate them. Written line-major in blocks
@@ -43,9 +44,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-TAHOE = "tahoebio/Tahoe-100M"
-TAHOE_REVISION = "2dc57900b7981cfcf5e211527169a0b006546a95"
-DMSO = "DMSO_TF"
+TAHOE_REVISION = "2dc57900b7981cfcf5e211527169a0b006546a95"  # the revision the context shards were built from
 N_REAL = 256  # per line: two halves of one Stack set each
 SET = 128  # base Stack's set size
 SEED = 0
@@ -59,54 +58,12 @@ def log(msg: str) -> None:
 # ----------------------------------------------------------------------------- cells
 
 
-def crosswalk(tahoe_de_dir: Path, lines: np.ndarray) -> dict[str, str]:
-    """Cellosaurus id -> DepMap id, from the DE shards' own columns (the first few suffice)."""
-    import duckdb
-
-    shards = sorted(str(p) for p in tahoe_de_dir.rglob("*.parquet") if "pseudobulk_differential_expression" in str(p))
-    # the shards are laid out by line, so every third is the density that reaches every line
-    df = duckdb.connect().execute(
-        "SELECT DISTINCT Cell_ID_Cellosaur AS cvcl, Cell_ID_DepMap AS depmap FROM read_parquet(?) WHERE Cell_ID_DepMap IS NOT NULL",
-        [shards[::3]],
-    ).df()
-    wanted = set(lines)
-    cw = {c: d for c, d in zip(df["cvcl"], df["depmap"]) if d in wanted}
-    log(f"crosswalk: {len(cw)} of {len(wanted)} lines have a Cellosaurus id in the sampled shards")
-    if len(set(cw.values())) < len(wanted):
-        raise RuntimeError(f"crosswalk misses lines: {sorted(wanted - set(cw.values()))}")
-    return cw
-
-
-def gene_metadata(revision: str) -> pd.DataFrame:
-    """Tahoe's token_id -> gene_symbol table from the local Hugging Face cache (no network);
-    falls back to the Hub only if the cached snapshot is absent."""
-    cache = Path(os.environ.get("HF_HUB_CACHE", Path.home() / ".cache/huggingface/hub"))
-    local = cache / "datasets--tahoebio--Tahoe-100M" / "snapshots" / revision / "metadata" / "gene_metadata.parquet"
-    if local.exists():
-        log(f"gene metadata from the local snapshot {local}")
-        return pd.read_parquet(local)
-    from datasets import load_dataset
-
-    return load_dataset(TAHOE, "gene_metadata", split="train", revision=revision).to_pandas()
-
-
-def with_retries(fn, what: str, tries: int = 6):
-    """Anonymous Hub calls get rate-limited on a shared cluster address; back off and retry."""
-    for attempt in range(tries):
-        try:
-            return fn()
-        except Exception as exc:  # noqa: BLE001 -- any Hub/HTTP failure is retried the same way
-            wait = 30 * (attempt + 1)
-            log(f"{what}: {type(exc).__name__}: {str(exc)[:120]} -- retry {attempt + 1}/{tries} in {wait}s")
-            time.sleep(wait)
-    raise RuntimeError(f"{what}: gave up after {tries} attempts")
-
-
 def cells(args: argparse.Namespace) -> None:
+    """Real DMSO cells from the context shards the 2026-08 generation work built from Tahoe's
+    raw cells (``context_by_drug/*.h5ad``: treated + plate-matched DMSO_TF cells of the 50
+    lines, capped per condition, over Stack's gene panel, DepMap id in ``cell_id``). Pooled
+    across shards and de-duplicated by cell name until each rung 1 line has N_REAL cells."""
     import anndata as ad
-    import pyarrow.compute as pc
-    import pyarrow.parquet as pq
-    from huggingface_hub import HfApi, HfFileSystem
     from scipy import sparse
 
     out = args.cache / "real_dmso.h5ad"
@@ -114,75 +71,46 @@ def cells(args: argparse.Namespace) -> None:
         log("real_dmso.h5ad present, skipping cells")
         return
     t = np.load(args.tensors, allow_pickle=True)
-    lines, genes = t["lines"], pd.Index(t["genes"])
-    cw = crosswalk(args.tahoe_dir, lines)
-    wanted_cvcl = set(cw)
-
-    gm = gene_metadata(TAHOE_REVISION)
-    col_of = genes.get_indexer(gm["gene_symbol"].astype(str))
-    token_to_col = {int(tok): int(c) for tok, c in zip(gm["token_id"], col_of) if c >= 0}
-    log(f"gene map: {len(token_to_col)} of {len(gm)} Tahoe tokens are in the rung 1 gene table")
-
-    listing = with_retries(lambda: HfApi().list_repo_files(TAHOE, repo_type="dataset", revision=TAHOE_REVISION), "shard listing")
-    files = sorted(f for f in listing if f.startswith("data/") and f.endswith(".parquet"))
-    log(f"{len(files)} expression shards; scanning from the start until every line has {N_REAL} DMSO cells")
-    fs = HfFileSystem()
-    kept: dict[str, list] = {d: [] for d in cw.values()}
-    meta_rows: list[dict] = []
-    tok_lookup = np.full(int(gm["token_id"].max()) + 1, -1, dtype=np.int64)
-    for tok, c in token_to_col.items():
-        tok_lookup[tok] = c
-
-    def full() -> bool:
-        return all(len(v) >= N_REAL for v in kept.values())
-
-    for si, path in enumerate(files[: args.max_shards]):
-        fh = with_retries(lambda: fs.open(f"datasets/{TAHOE}@{TAHOE_REVISION}/{path}", "rb"), f"open {path}")
-        with fh:
-            pf = pq.ParquetFile(fh)
-            for rg in range(pf.num_row_groups):
-                meta = pf.read_row_group(rg, columns=["drug", "cell_line_id", "plate"])
-                drug = np.asarray(meta.column("drug").to_pylist(), dtype=object)
-                cvcl = np.asarray(meta.column("cell_line_id").to_pylist(), dtype=object)
-                need = np.array([c in wanted_cvcl and len(kept[cw[c]]) < N_REAL for c in cvcl]) & (drug == DMSO)
-                if not need.any():
-                    continue
-                rows = np.flatnonzero(need)
-                expr = pf.read_row_group(rg, columns=["genes", "expressions"])
-                g_col = pc.take(expr.column("genes"), rows)
-                x_col = pc.take(expr.column("expressions"), rows)
-                plate = np.asarray(meta.column("plate").to_pylist(), dtype=object)[rows]
-                for r, (gl, xl, c) in enumerate(zip(g_col.to_pylist(), x_col.to_pylist(), cvcl[rows])):
-                    line = cw[c]
-                    if len(kept[line]) >= N_REAL:
-                        continue
-                    toks = np.asarray(gl, dtype=np.int64)
-                    vals = np.asarray(xl, dtype=np.float32)
-                    ok = (toks < len(tok_lookup)) & (tok_lookup[np.minimum(toks, len(tok_lookup) - 1)] >= 0)
-                    cols = tok_lookup[toks[ok]]
-                    kept[line].append(sparse.csr_matrix((vals[ok], (np.zeros(ok.sum(), dtype=np.int64), cols)), shape=(1, len(genes))))
-                    meta_rows.append({"line": line, "cellosaurus": c, "plate": plate[r], "shard": path})
-        counts = {k: len(v) for k, v in kept.items()}
-        log(f"shard {si + 1}: lines full {sum(v >= N_REAL for v in counts.values())}/{len(counts)}, "
-            f"min per line {min(counts.values())}, cells kept {sum(counts.values())}")
-        if full():
+    lines = [str(x) for x in t["lines"]]
+    shards = sorted(args.context_dir.glob("*.h5ad"))
+    if not shards:
+        raise FileNotFoundError(f"no context shards under {args.context_dir}")
+    kept: dict[str, list] = {ln: [] for ln in lines}
+    names: dict[str, set] = {ln: set() for ln in lines}
+    var = None
+    for si, path in enumerate(shards):
+        a = ad.read_h5ad(path)
+        if var is None:
+            var = a.var.copy()
+        ctrl = a.obs["is_control"].astype(str).str.lower().isin(["true", "1"]).to_numpy()
+        cid = a.obs["cell_id"].astype(str).to_numpy()
+        for ln in lines:
+            if len(kept[ln]) >= N_REAL:
+                continue
+            idx = np.flatnonzero(ctrl & (cid == ln))
+            idx = [i for i in idx if a.obs_names[i] not in names[ln]][: N_REAL - len(kept[ln])]
+            if idx:
+                kept[ln].append(sparse.csr_matrix(a.X[idx]))
+                names[ln].update(a.obs_names[idx])
+        counts = {ln: sum(b.shape[0] for b in kept[ln]) for ln in lines}
+        log(f"shard {si + 1}/{len(shards)} {path.name}: lines full {sum(v >= N_REAL for v in counts.values())}/{len(lines)}, "
+            f"min per line {min(counts.values())}")
+        if all(v >= N_REAL for v in counts.values()):
             break
-
-    short = sorted(k for k, v in kept.items() if len(v) < N_REAL)
+    counts = {ln: sum(b.shape[0] for b in kept[ln]) for ln in lines}
+    short = sorted(ln for ln, v in counts.items() if v < N_REAL)
     if short:
-        log(f"lines short of {N_REAL} DMSO cells after {args.max_shards} shards (dropped from rung 2): {short}")
-    order = [ln for ln in lines if ln in kept and len(kept[ln]) >= N_REAL]
-    X = sparse.vstack([sparse.vstack(kept[ln][:N_REAL]) for ln in order]).tocsr()
-    obs = pd.DataFrame({"line": np.repeat(order, N_REAL)})
-    obs.index = [f"{ln}_{i}" for ln in order for i in range(N_REAL)]
-    adata = ad.AnnData(X=X, obs=obs)
-    adata.var_names = list(genes)
-    adata.var["feature_name"] = list(genes)
+        log(f"lines short of {N_REAL} DMSO cells across all shards (dropped from rung 2): {short}")
+    order = [ln for ln in lines if counts[ln] >= N_REAL]
+    X = sparse.vstack([sparse.vstack(kept[ln])[:N_REAL] for ln in order]).tocsr()
+    adata = ad.AnnData(X=X, obs=pd.DataFrame({"line": np.repeat(order, N_REAL)}), var=var)
+    adata.obs.index = [f"{ln}_{i}" for ln in order for i in range(N_REAL)]
+    if "feature_name" not in adata.var.columns:
+        adata.var["feature_name"] = adata.var_names
     adata.write_h5ad(out)
-    pd.DataFrame(meta_rows).to_csv(args.cache / "real_dmso_meta.csv", index=False)
     lib = np.asarray(X.sum(1)).ravel()
-    log(f"wrote real_dmso.h5ad: {adata.n_obs} cells, {len(order)} lines; library size median {np.median(lib):.0f} "
-        f"(IQR {np.percentile(lib, 25):.0f}-{np.percentile(lib, 75):.0f}); genes detected median {int(np.median((X > 0).sum(1)))}")
+    log(f"wrote real_dmso.h5ad: {adata.n_obs} cells, {len(order)} lines, {adata.n_vars} panel genes; library size median "
+        f"{np.median(lib):.0f} (IQR {np.percentile(lib, 25):.0f}-{np.percentile(lib, 75):.0f}); genes detected median {int(np.median((X > 0).sum(1)))}")
 
 
 # ----------------------------------------------------------------------------- embed
@@ -200,22 +128,27 @@ def embed(args: argparse.Namespace) -> None:
         return
     real = ad.read_h5ad(args.cache / "real_dmso.h5ad")
     t = np.load(args.tensors, allow_pickle=True)
-    E, lines, genes = t["E"], list(t["lines"]), pd.Index(t["genes"])
-    assert list(real.var_names) == list(genes), "real cells must be over the rung 1 gene table"
+    E, lines, genes = t["E"], [str(x) for x in t["lines"]], pd.Index(t["genes"])
+    # the genes both populations carry: Stack's panel (the real cells' genes) within the rung 1 table
+    panel = real.var["feature_name"].astype(str).to_numpy()
+    shared = np.flatnonzero(genes.get_indexer(panel) >= 0)
+    e_cols = genes.get_indexer(panel[shared])
+    log(f"{len(shared)} of {len(panel)} panel genes are in the rung 1 table; both populations restricted to them")
     order = [ln for ln in lines if ln in set(real.obs["line"])]
     rng = np.random.default_rng(SEED)
     blocks, obs = [], []
     for ln in order:
-        R = real[real.obs["line"] == ln].X.tocsr()
-        lib = np.asarray(R.sum(1)).ravel()
-        p = E[lines.index(ln)] / max(E[lines.index(ln)].sum(), 1e-12)
+        R = real[real.obs["line"] == ln].X.tocsr()[:, shared]
+        lib = np.asarray(R.sum(1)).ravel()  # each real cell's library over the shared genes
+        prof = E[lines.index(ln)][e_cols]
+        p = prof / max(prof.sum(), 1e-12)
         S = sparse.csr_matrix(np.stack([rng.multinomial(int(round(lib[j])), p) for j in range(SET)]).astype(np.float32))
         blocks += [R[0::2][:SET], R[1::2][:SET], S]
         obs += [(ln, k) for k in KINDS for _ in range(SET)]
     adata = ad.AnnData(X=sparse.vstack(blocks).tocsr(), obs=pd.DataFrame(obs, columns=["line", "kind"]))
     adata.obs.index = [f"{a}_{b}_{i}" for i, (a, b) in enumerate(obs)]
-    adata.var_names = list(genes)
-    adata.var["feature_name"] = list(genes)
+    adata.var_names = list(panel[shared])
+    adata.var["feature_name"] = list(panel[shared])
     h5 = args.cache / "bridge_cells.h5ad"
     adata.write_h5ad(h5)
     log(f"wrote bridge_cells.h5ad: {adata.n_obs} cells = {len(order)} lines x 3 blocks x {SET}")
@@ -283,11 +216,10 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--stage", choices=("cells", "embed", "score", "all"), default="all")
     ap.add_argument("--tensors", type=Path, required=True, help="rung 1 tensors.npz (E, lines, genes)")
-    ap.add_argument("--tahoe-dir", type=Path, required=True, help="Tahoe DE shards on scratch (for the id crosswalk)")
+    ap.add_argument("--context-dir", type=Path, default=Path("context_by_drug"), help="per-drug context shards with real Tahoe cells")
     ap.add_argument("--genelist", type=Path, default=Path("stack-large/basecount_1000per_15000max.pkl"))
     ap.add_argument("--cache", type=Path, required=True)
     ap.add_argument("--out", type=Path, required=True)
-    ap.add_argument("--max-shards", type=int, default=400)
     args = ap.parse_args()
     args.cache.mkdir(parents=True, exist_ok=True)
     args.out.mkdir(parents=True, exist_ok=True)
