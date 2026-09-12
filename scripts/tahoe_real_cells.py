@@ -206,20 +206,29 @@ def combine(args: argparse.Namespace) -> None:
         raise SystemExit(f"blocks not done: {missing}")
     t = np.load(args.tensors, allow_pickle=True)
     genes = pd.Index(t["genes"])
-    metas, mats = [], []
+    # Decide what to keep from the small metadata tables first (global shard order, then
+    # arrival, capped per key), then read each block's matrix once and keep only those rows,
+    # so peak memory is one block plus the kept cells rather than all sixteen blocks.
+    metas = []
     for b in range(args.n_blocks):
         m = pd.read_parquet(args.cache / f"block_{b}.parquet")
-        if len(m):
-            metas.append(m)
-            mats.append(sparse.load_npz(args.cache / f"block_{b}.npz"))
+        m["block"], m["row"] = b, np.arange(len(m))
+        metas.append(m)
     meta = pd.concat(metas, ignore_index=True)
-    X = sparse.vstack(mats).tocsr()
-    order = np.lexsort((meta.index.to_numpy(), meta["shard"].to_numpy()))  # shard order, then arrival
-    meta, X = meta.iloc[order].reset_index(drop=True), X[order]
+    meta = meta.iloc[np.lexsort((meta["row"].to_numpy(), meta["block"].to_numpy(), meta["shard"].to_numpy()))].reset_index(drop=True)
     cap = np.where(meta["kind"] == "control", DMSO_PER_LINE, TREATED_PER_PAIR)
-    rank = meta.groupby(["line", "drug"]).cumcount().to_numpy()
-    keep = rank < cap
-    meta, X = meta[keep].reset_index(drop=True), X[keep]
+    keep = meta.groupby(["line", "drug"]).cumcount().to_numpy() < cap
+    meta = meta[keep].reset_index(drop=True)
+    log(f"combine: keeping {len(meta)} of {int(keep.size)} scanned cells")
+    mats = []
+    for b in range(args.n_blocks):
+        rows = meta.loc[meta["block"] == b, "row"].to_numpy()
+        if len(rows):
+            mats.append(sparse.load_npz(args.cache / f"block_{b}.npz")[rows])
+    X = sparse.vstack(mats).tocsr()
+    order = np.argsort(np.concatenate([meta.index[meta["block"] == b].to_numpy() for b in range(args.n_blocks)]), kind="stable")
+    X = X[order]
+    meta = meta.drop(columns=["block", "row"])
     adata = ad.AnnData(X=X, obs=meta)
     adata.obs.index = [f"c{i}" for i in range(adata.n_obs)]
     adata.var_names = list(genes)
