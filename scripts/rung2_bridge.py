@@ -5,15 +5,16 @@ probabilities and cells are drawn as multinomial(library, p). This script tests 
 putting real Tahoe cells of the same lines through the same model and asking whether each
 line's synthetic population sits with its own real population.
 
-  cells   Real DMSO_TF (vehicle) cells of each rung 1 line, 256 per line, pooled from the
+  cells   Real DMSO_TF (vehicle) cells of each rung 1 line, 200 per line, pooled from the
           per-drug context shards the 2026-08 generation work built from Tahoe's raw cells
           (context_by_drug/*.h5ad, already on the Alpine checkout; over Stack's gene panel).
           Written as real_dmso.h5ad. No download.
-  embed   For each line: real half A (128 cells, even positions), real half B (128, odd), and
-          128 synthetic cells drawn from the line's baseline profile with the library sizes of
-          its real cells, so library size cannot separate them. Written line-major in blocks
-          of 128 so each block is one Stack set of one population, and embedded with the base
-          Stack encoder (set size 128).
+  embed   For each line: real half A (100 cells, even positions), real half B (100, odd), and
+          100 synthetic cells drawn from the line's baseline profile with the library sizes of
+          its real cells, so library size cannot separate them. Each 100-cell population is
+          embedded as its own set with the base Stack encoder: the loader pads a set to the
+          model's 128 by resampling cells of that same population, so no set mixes lines or
+          kinds, and only the 100 real rows come back.
   score   Mean embedding per block. For each line, cosine distance from its synthetic
           population to every line's real population (halves pooled):
             rank_synthetic   rank of the matched line among the 49 (1 = lands on its own line)
@@ -45,8 +46,8 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 TAHOE_REVISION = "2dc57900b7981cfcf5e211527169a0b006546a95"  # the revision the context shards were built from
-N_REAL = 256  # per line: two halves of one Stack set each
-SET = 128  # base Stack's set size
+N_REAL = 200  # per line: every context shard carries the same 200 DMSO cells per line, so 200 is what exists
+SET = 100  # cells per population block (real half A, real half B, synthetic); each block is embedded as its own set
 SEED = 0
 KINDS = ("real_a", "real_b", "synthetic")
 
@@ -136,31 +137,30 @@ def embed(args: argparse.Namespace) -> None:
     log(f"{len(shared)} of {len(panel)} panel genes are in the rung 1 table; both populations restricted to them")
     order = [ln for ln in lines if ln in set(real.obs["line"])]
     rng = np.random.default_rng(SEED)
-    blocks, obs = [], []
+    model = load_stack_model(Path(os.environ["CKPT_BASE"]), args.cache)
+    embs, lab_line, lab_kind = [], [], []
     for ln in order:
         R = real[real.obs["line"] == ln].X.tocsr()[:, shared]
         lib = np.asarray(R.sum(1)).ravel()  # each real cell's library over the shared genes
         prof = E[lines.index(ln)][e_cols]
         p = prof / max(prof.sum(), 1e-12)
         S = sparse.csr_matrix(np.stack([rng.multinomial(int(round(lib[j])), p) for j in range(SET)]).astype(np.float32))
-        blocks += [R[0::2][:SET], R[1::2][:SET], S]
-        obs += [(ln, k) for k in KINDS for _ in range(SET)]
-    adata = ad.AnnData(X=sparse.vstack(blocks).tocsr(), obs=pd.DataFrame(obs, columns=["line", "kind"]))
-    adata.obs.index = [f"{a}_{b}_{i}" for i, (a, b) in enumerate(obs)]
-    adata.var_names = list(panel[shared])
-    adata.var["feature_name"] = list(panel[shared])
-    h5 = args.cache / "bridge_cells.h5ad"
-    adata.write_h5ad(h5)
-    log(f"wrote bridge_cells.h5ad: {adata.n_obs} cells = {len(order)} lines x 3 blocks x {SET}")
-
-    model = load_stack_model(Path(os.environ["CKPT_BASE"]), args.cache)
-    emb, _ = model.get_latent_representation(
-        adata_path=str(h5), genelist_path=str(args.genelist), gene_name_col="feature_name",
-        batch_size=8, show_progress=False, num_workers=0, random_state=SEED,
-    )
-    emb = np.asarray(emb, dtype=np.float32)
-    assert emb.shape[0] == adata.n_obs
-    np.savez(out, emb=emb, line=adata.obs["line"].to_numpy(), kind=adata.obs["kind"].to_numpy())
+        for kind, X in zip(KINDS, (R[0::2][:SET], R[1::2][:SET], S)):
+            block = ad.AnnData(X=X.tocsr())
+            block.var_names = list(panel[shared])
+            block.var["feature_name"] = list(panel[shared])
+            e, _ = model.get_latent_representation(
+                adata_path=block, genelist_path=str(args.genelist), gene_name_col="feature_name",
+                batch_size=1, show_progress=False, num_workers=0, random_state=SEED,
+            )
+            e = np.asarray(e, dtype=np.float32)
+            assert e.shape[0] == X.shape[0], (ln, kind, e.shape, X.shape)
+            embs.append(e)
+            lab_line += [ln] * e.shape[0]
+            lab_kind += [kind] * e.shape[0]
+        log(f"embedded {ln}: 3 populations x {SET} cells")
+    emb = np.concatenate(embs)
+    np.savez(out, emb=emb, line=np.array(lab_line), kind=np.array(lab_kind))
     log(f"embedded {emb.shape[0]} cells x {emb.shape[1]} with the base encoder")
 
 
