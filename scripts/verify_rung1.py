@@ -263,12 +263,18 @@ def grid_record(task_dir: Path, cache: Path | None = None) -> dict[str, Any] | N
     return None
 
 
-def is_design_grid(record: dict[str, Any]) -> bool:
-    """True unless this grid is plainly a smaller fixture than the design's.
+def is_at_least_design_size(record: dict[str, Any]) -> bool:
+    """True when this grid reaches the design's size in EITHER dimension.
 
-    A grid at least as large as the design's in either dimension is checked strictly against
-    50 x 107: a run that lost a drug must FAIL here, not skip. Only a grid smaller in BOTH
-    dimensions -- a test fixture -- is exempt.
+    Not an equality test, and the name says so: by De Morgan the predicate below is
+    ``lines >= 50 or drugs >= 107``, false only for a grid smaller than the design in BOTH
+    dimensions. 50 x 8 is at least design size; 3 x 107 is; only a fixture small in both is
+    exempt.
+
+    The asymmetry is deliberate and load-bearing. A run that lost a drug (50 x 106) takes the
+    strict path and then FAILS the equality check that follows, which is the point: a predicate
+    meaning "exactly 50 x 107" would let that run skip instead. Five checks across four call
+    sites, and the exit status, key off this.
     """
     lines, drugs = len(record.get("lines", [])), len(record.get("drugs", []))
     return not (lines < DESIGN_LINES and drugs < DESIGN_DRUGS)
@@ -337,7 +343,7 @@ def check_grid(task_dir: Path, cache: Path | None = None) -> list[Check]:
     )
 
     lines, drugs = list(record.get("lines", [])), list(record.get("drugs", []))
-    if is_design_grid(record):
+    if is_at_least_design_size(record):
         checks.append(
             Check(
                 names[1],
@@ -355,7 +361,7 @@ def check_grid(task_dir: Path, cache: Path | None = None) -> list[Check]:
             )
         )
 
-    design_grid = is_design_grid(record)
+    design_grid = is_at_least_design_size(record)
     for name, key, items in (
         (names[2], "sha256_lines", lines),
         (names[3], "sha256_drugs", drugs),
@@ -651,12 +657,129 @@ def holm(p: np.ndarray) -> np.ndarray:
     return adjusted
 
 
+def _summary_seed(task_dir: Path) -> int | None:
+    """The seed the run recorded for the model summary's own redraws (``seeds.model_summary``).
+
+    Those intervals are drawn inside the combine's process and never written down, so this seed
+    is the only thing that lets anyone outside it draw them again.
+    """
+    params = _read_json(task_dir / PARAMS_JSON) or {}
+    seeds = params.get("seeds", {})
+    seed = seeds.get("model_summary") if isinstance(seeds, dict) else None
+    return int(seed) if isinstance(seed, int) and not isinstance(seed, bool) else None
+
+
+def _held_out_units(wide: pd.DataFrame, record: dict[str, Any], scheme: str) -> np.ndarray | None:
+    """Each scored pair's held-out unit as a position in the grid's own order: its line when a
+    line was hidden, its drug when a drug was hidden.
+
+    ``None`` when a scored pair names a line or a drug the grid record does not -- a disagreement
+    the grid checks report in their own right, and not something to recompute an interval from.
+    """
+    names = [str(value) for value in record.get("lines" if scheme == "lolo" else "drugs", [])]
+    position = {name: index for index, name in enumerate(names)}
+    keys = [str(line if scheme == "lolo" else drug) for line, drug in wide.index]
+    if any(key not in position for key in keys):
+        return None
+    return np.array([position[key] for key in keys], dtype=np.int64)
+
+
+def _redraw_counts(n_units: int, seed: int) -> np.ndarray:
+    """``[N_DRAWS, n_units]``: how many times each held-out unit falls in each redraw.
+
+    The resampling the run performs, written out here rather than imported: this battery
+    recomputes what was reported, it does not call the code that reported it. Every model of a
+    (scheme, gene set) is redrawn from the one seed, so the counts are drawn once and shared --
+    identical to one ``default_rng(seed)`` per model, which is what the run does.
+    """
+    return np.random.default_rng(seed).multinomial(
+        n_units, np.full(n_units, 1.0 / n_units), size=N_DRAWS
+    )
+
+
+def _redrawn_means(
+    values: np.ndarray, units: np.ndarray, counts: np.ndarray, n_units: int
+) -> np.ndarray:
+    """Each redraw's mean of ``values`` over the units it drew; NaN for a draw weighing no pair."""
+    sums = np.bincount(units, weights=values, minlength=n_units)
+    pairs = np.bincount(units, minlength=n_units)
+    numerator, denominator = counts @ sums, counts @ pairs
+    means = np.full(numerator.shape, np.nan)
+    np.divide(numerator, denominator, out=means, where=denominator > 0)
+    return means
+
+
+def _check_summary_intervals(
+    rows: pd.DataFrame,
+    wide: pd.DataFrame,
+    record: dict[str, Any] | None,
+    scheme: str,
+    seed: int | None,
+    name: str,
+) -> Check:
+    """The model summary's interval, standard deviation and MDE, redrawn here from the scores.
+
+    These are the one reported family with no written draws behind them: the combine redraws the
+    held-out units in its own process and keeps nothing, so "the interval contains the mean" was
+    all that had ever been checked -- and that passes a standard deviation ten times too large,
+    or an interval an order of magnitude too wide. The draws are taken again from the committed
+    per-pair scores and the seed the parameter sidecar records, and the four values compared.
+    """
+    if record is None:
+        return skipped(
+            name, f"{GRID_JSON} does not exist, so which unit each pair belongs to is unknown"
+        )
+    if seed is None:
+        return skipped(
+            name,
+            f"{PARAMS_JSON} records no seeds.model_summary, the seed these intervals were "
+            "drawn with",
+        )
+    units = _held_out_units(wide, record, scheme)
+    if units is None:
+        return skipped(name, "a scored pair names a line or a drug that is not in the grid record")
+
+    n_units = len(record.get("lines" if scheme == "lolo" else "drugs", []))
+    counts = _redraw_counts(n_units, seed)
+    worst = 0.0
+    disagreeing: list[str] = []
+    for model in wide.columns:
+        reported = rows.loc[rows["model"] == str(model)]
+        if reported.empty:
+            continue
+        draws = _redrawn_means(wide[model].to_numpy(dtype=np.float64), units, counts, n_units)
+        finite = draws[np.isfinite(draws)]
+        if finite.size < 2:
+            disagreeing.append(f"{model} (no draws)")
+            continue
+        low, high = _percentiles(finite)
+        sd = float(finite.std(ddof=1))
+        row = reported.iloc[0]
+        worst = max(
+            worst,
+            abs(_f(row["ci_lo"]) - low),
+            abs(_f(row["ci_hi"]) - high),
+            abs(_f(row["sd"]) - sd),
+            abs(_f(row["mde"]) - MDE_FACTOR * sd),
+        )
+        if _i(row["n_draws"]) != finite.size or _i(row["n_dropped"]) != draws.size - finite.size:
+            disagreeing.append(f"{model} (n_draws)")
+
+    return Check(
+        name,
+        f"{len(rows)} intervals, standard deviations and MDEs in {MODEL_SUMMARY}",
+        f"largest difference from {N_DRAWS} redraws of the {n_units} held-out units at seed "
+        f"{seed}: {worst:.3e}" + (f"; disagreeing {disagreeing}" if disagreeing else ""),
+        worst <= TOLERANCE and not disagreeing,
+    )
+
+
 # ------------------------------------------------------------------------------------------
 # each model's score, and its fraction of the ceiling
 # ------------------------------------------------------------------------------------------
 
 
-def check_model_summary(task_dir: Path) -> list[Check]:
+def check_model_summary(task_dir: Path, cache: Path | None = None) -> list[Check]:
     """``rung1_model_summary.csv`` against the per-pair scores it summarises.
 
     Keyed by (scheme, model, gene set), per ruling 39: a model fitted with a line hidden and the
@@ -676,6 +799,7 @@ def check_model_summary(task_dir: Path) -> list[Check]:
                 "mean score recomputes from the pair scores",
                 "fraction of the ceiling is the mean over √SB",
                 "the interval contains the mean",
+                "the interval, sd and MDE recompute from the redrawn units",
             )
         ]
 
@@ -684,6 +808,8 @@ def check_model_summary(task_dir: Path) -> list[Check]:
     assert pair_scores is not None
     population = scored_population(pair_scores)
     ceiling = _ceiling_values(task_dir)
+    record = grid_record(task_dir, cache)
+    seed = _summary_seed(task_dir)
 
     expected = {
         (scheme, str(model), gene_set)
@@ -760,6 +886,16 @@ def check_model_summary(task_dir: Path) -> list[Check]:
                     not outside,
                 ),
             ]
+        )
+        checks.append(
+            _check_summary_intervals(
+                rows,
+                wide,
+                record,
+                scheme,
+                seed,
+                f"{key} the interval, sd and MDE recompute from the redrawn units",
+            )
         )
     return checks
 
@@ -1437,7 +1573,7 @@ def _check_component_ks(
     # reads happens to be there. Ruling 36 requires component_ks in the sidecar, so on the
     # design's grid its absence is the failure, and it is tested before the record is read.
     record = grid_record(task_dir, cache)
-    if record is not None and not is_design_grid(record):
+    if record is not None and not is_at_least_design_size(record):
         return skipped(
             name,
             f"this run's grid is {grid_shape(record)}, smaller than the design's "
@@ -1491,7 +1627,7 @@ def run_all_checks(
         *check_grid_provenance(task_dir, resolved),
         *check_ceiling(task_dir, repo, resolved),
         *check_settings(task_dir, resolved),
-        *check_model_summary(task_dir),
+        *check_model_summary(task_dir, resolved),
         *check_comparisons(task_dir, resolved),
         *check_leakage(task_dir, resolved),
         *check_figures(task_dir),
@@ -1574,7 +1710,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     record = grid_record(task_dir, resolved)
     checks = run_all_checks(task_dir, cache=ns.cache)
     print(render(checks))
-    status = exit_status(checks, design_grid=record is None or is_design_grid(record))
+    status = exit_status(checks, design_grid=record is None or is_at_least_design_size(record))
     if status != 0 and all(check.ok for check in checks):
         print(
             "FAILING anyway: the battery did not verify what it was asked to. Every check above "

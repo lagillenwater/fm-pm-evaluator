@@ -122,6 +122,7 @@ def test_the_battery_covers_every_layer(artifacts: tuple[Path, Path]) -> None:
         "model summary: one row per",
         "mean score recomputes",
         "fraction of the ceiling",
+        "recompute from the redrawn units",
         "estimates recompute",
         "confidence intervals",
         "p-values recompute",
@@ -157,6 +158,36 @@ def test_a_perturbed_mean_score_fails_the_battery(artifacts: tuple[Path, Path]) 
     failed = [str(c.name) for c in vr.run_all_checks(out_dir, cache=cache) if not c.ok]
     assert any("mean score recomputes" in name for name in failed), (
         f"the battery passed on a mean moved from {was} to {PERTURBATION}; failures: {failed}"
+    )
+
+
+def test_a_widened_model_summary_interval_fails_the_battery(artifacts: tuple[Path, Path]) -> None:
+    """The model summary's interval, sd and MDE are the one reported family with no written
+    draws behind them -- the combine redraws them in its own process and keeps nothing.
+
+    The only check that ever read them was "the interval contains the mean", which a standard
+    deviation ten times too large, and an interval an order of magnitude too wide, both pass.
+    This moves exactly those numbers and requires the battery to say so; the final assertion
+    shows the containment check still passing on the same file, which is why the values are
+    recomputed rather than merely bracketed.
+    """
+    out_dir, cache = artifacts
+    path = out_dir / "rung1_model_summary.csv"
+    table = pd.read_csv(path, float_precision="round_trip")
+    mean = float(table.loc[0, "mean_r"])
+    table.loc[0, "sd"] = float(table.loc[0, "sd"]) * 10.0
+    table.loc[0, "mde"] = float(table.loc[0, "mde"]) * 10.0
+    table.loc[0, "ci_lo"] = mean - 10.0 * (mean - float(table.loc[0, "ci_lo"]))
+    table.loc[0, "ci_hi"] = mean + 10.0 * (float(table.loc[0, "ci_hi"]) - mean)
+    table.to_csv(path, index=False)
+
+    checks = vr.run_all_checks(out_dir, cache=cache)
+    failed = [str(c.name) for c in checks if not c.ok]
+    assert any("recompute from the redrawn units" in name for name in failed), failed
+
+    contains = _named(checks, "the interval contains the mean")
+    assert contains and all(c.ok for c in contains), (
+        "the containment check caught this, so it is not the gap these recomputed values fill"
     )
 
 
