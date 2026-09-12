@@ -168,7 +168,7 @@ FIXTURE_IDENTITY_SHARE, FIXTURE_NULL_MEAN, FIXTURE_NULL_P99 = 0.8333, 0.1667, 0.
 # The fixture cache: exactly the files a round reads, at 6 lines x 8 drugs.
 
 
-def _write_fixture(cache: Path) -> Path:
+def write_fixture(cache: Path) -> Path:
     """Write ``rung1_grid.json``, ``answers.npz``, ``descriptions.npz``, ``tanimoto.npz`` and the
     three ``embedding_{version}.parquet`` files into ``cache``; return the grid's path."""
     cache.mkdir(parents=True, exist_ok=True)
@@ -267,7 +267,7 @@ def _write_drug_metadata(cache: Path) -> Path:
     return path
 
 
-def _write_build_tables(out_dir: Path) -> None:
+def write_build_tables(out_dir: Path) -> None:
     """The tables earlier stages leave in ``--out-dir``, which the combine's build control and
     build figure read: the ceiling, the cells per line and plate, each description's
     half-versus-half identity match with its shuffled null, the correlation grids behind them,
@@ -373,7 +373,7 @@ def _run_cli(mp: pytest.MonkeyPatch, module: ModuleType, args: list[str]) -> Non
     module.main()
 
 
-def _stage_by_stage(cache: Path, grid_path: Path, out_dir: Path) -> None:
+def stage_by_stage(cache: Path, grid_path: Path, out_dir: Path) -> None:
     """Every round, redraw block and finally the combine, through its own command line."""
     with pytest.MonkeyPatch.context() as mp:
         for scheme, n_rounds in (("lolo", N_LINES), ("lodo", N_DRUGS)):
@@ -486,11 +486,11 @@ def run_dirs(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
     root = tmp_path_factory.mktemp("rung1_pipeline")
     staged, single = root / "staged", root / "single"
     out_staged, out_single = root / "out_staged", root / "out_single"
-    grid_path = _write_fixture(staged)
+    grid_path = write_fixture(staged)
     shutil.copytree(staged, single)
     for out_dir in (out_staged, out_single):
-        _write_build_tables(out_dir)
-    _stage_by_stage(staged, grid_path, out_staged)
+        write_build_tables(out_dir)
+    stage_by_stage(staged, grid_path, out_staged)
     _in_one_process(single, single / "rung1_grid.json", out_single)
     return {
         "staged": staged,
