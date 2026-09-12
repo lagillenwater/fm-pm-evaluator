@@ -205,6 +205,66 @@ def test_an_altered_input_fails_its_recorded_checksum(artifacts: tuple[Path, Pat
     assert any("pinned input" in name for name in failed), f"failures: {failed}"
 
 
+def test_a_missing_stand_in_contrast_fails_the_battery(artifacts: tuple[Path, Path]) -> None:
+    """Design section 7's control for H1(b) is each description against its own random stand-in:
+    a description that beats its stand-in gained from what it describes, not from the method. A
+    run that reported none of those twelve contrasts must fail, not pass on the eleven
+    hypothesis rows."""
+    out_dir, cache = artifacts
+    path = out_dir / "rung1_comparisons.csv"
+    table = pd.read_csv(path, float_precision="round_trip")
+    dropped = "lolo_expression_vs_random_expression"
+    assert dropped in set(table["comparison"].astype(str)), "the fixture never ran that contrast"
+    table.loc[table["comparison"] != dropped].to_csv(path, index=False)
+
+    failed = [str(c.name) for c in vr.run_all_checks(out_dir, cache=cache) if not c.ok]
+    assert any("stand-in contrast" in name for name in failed), failed
+
+
+def test_a_perturbed_interval_or_mde_fails_the_battery(artifacts: tuple[Path, Path]) -> None:
+    """The four statistics read off the redraws are what a promotion rests on, so each has to
+    bite: move an interval bound and a minimum detectable effect away from the draws they came
+    from, and the battery must name both."""
+    out_dir, cache = artifacts
+    path = out_dir / "rung1_comparisons.csv"
+    table = pd.read_csv(path, float_precision="round_trip")
+    table.loc[0, "ci_lo"] = float(table.loc[0, "ci_lo"]) - PERTURBATION
+    table.loc[0, "mde"] = float(table.loc[0, "mde"]) + PERTURBATION
+    table.to_csv(path, index=False)
+
+    failed = [str(c.name) for c in vr.run_all_checks(out_dir, cache=cache) if not c.ok]
+    assert any("confidence intervals" in name for name in failed), failed
+    assert any("minimum detectable effects" in name for name in failed), failed
+
+
+def test_a_missing_figures_directory_fails_when_the_run_is_present(
+    artifacts: tuple[Path, Path],
+) -> None:
+    """A figure whose source table was never written is a stage that did not run; a missing
+    figures directory beside a finished run is a broken figure step. Skipping says neither."""
+    out_dir, cache = artifacts
+    shutil.rmtree(out_dir / "figures")
+    checks = vr.run_all_checks(out_dir, cache=cache)
+    figures = _named(checks, "figures:")
+    assert figures and not any(c.skipped for c in figures), [(c.name, c.skipped) for c in figures]
+    assert any(not c.ok for c in figures), [(c.name, c.computed) for c in figures]
+
+
+def test_a_missing_ceiling_table_does_not_weaken_the_fraction_claim(
+    artifacts: tuple[Path, Path],
+) -> None:
+    """Without rung1_ceiling.csv the fraction of the ceiling can only be checked against the
+    summary's own denominator, which is self-consistency, not verification. It must fail rather
+    than pass on a number nothing corroborates."""
+    out_dir, cache = artifacts
+    (out_dir / "rung1_ceiling.csv").unlink()
+    fractions = _named(vr.run_all_checks(out_dir, cache=cache), "fraction of the ceiling")
+    assert fractions, "no check covers the fraction of the ceiling"
+    assert not any(c.ok and not c.skipped for c in fractions), [
+        (c.name, c.ok, c.skipped, c.computed) for c in fractions
+    ]
+
+
 def test_checks_that_cannot_run_skip_rather_than_pass(artifacts: tuple[Path, Path]) -> None:
     """With the redraw blocks gone, everything read off them -- the intervals, the p-values, the
     MDEs, the design effect -- must come back SKIP, naming what was absent. A check that passed
@@ -274,6 +334,42 @@ def test_main_exits_two_when_there_is_no_run(
     assert "no run to verify" in capsys.readouterr().out
 
 
+def test_main_does_not_exit_zero_when_it_verified_nothing(
+    tmp_path: Path, artifacts: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A folder holding only the model summary passes main's gate and then skips every check.
+    Exiting 0 there is green continuous integration over an unverified run -- the realistic path
+    being a purged scratch cache, where the intervals, p-values and MDEs a promotion rests on all
+    skip while the exit status says pass."""
+    out_dir, _ = artifacts
+    shutil.copy(out_dir / "rung1_model_summary.csv", tmp_path / "rung1_model_summary.csv")
+    status = vr.main(["--task-dir", str(tmp_path)])
+    printed = capsys.readouterr().out
+    assert status != 0, printed
+    assert "0 /" in printed or "verified nothing" in printed
+
+
+def _check(name: str, *, ok: bool = True, skipped: bool = False, group: str = "") -> Any:
+    return vr.Check(name, "claim", "recomputed", ok, skipped=skipped, group=group)
+
+
+def test_the_exit_status_refuses_a_clean_pass_it_did_not_earn() -> None:
+    """The rule in code rather than in a note to a reader: a battery that ran nothing, or that
+    skipped the redraw statistics on the design's own grid, has not verified the run."""
+    ran = [_check("a"), _check("b", group="redraws")]
+    assert vr.exit_status(ran, design_grid=True) == 0
+    assert vr.exit_status([*ran, _check("c", ok=False)], design_grid=True) == 1
+
+    nothing_ran = [_check("a", skipped=True), _check("b", skipped=True, group="redraws")]
+    assert vr.exit_status(nothing_ran, design_grid=False) == 1
+    assert vr.exit_status(nothing_ran, design_grid=True) == 1
+
+    redraws_skipped = [_check("a"), _check("b", skipped=True, group="redraws")]
+    assert vr.exit_status(redraws_skipped, design_grid=True) == 1
+    # on a fixture grid the same skip is legitimate and does not fail the battery
+    assert vr.exit_status(redraws_skipped, design_grid=False) == 0
+
+
 # ==============================================================================================
 # The claims the fixture's 6 x 8 grid cannot exercise: the design's own grid, and its ceiling
 
@@ -321,13 +417,43 @@ def test_the_design_size_grid_claims_run_and_bite(tmp_path: Path) -> None:
 def test_the_grid_hash_claims_skip_when_the_record_holds_no_hashes(
     artifacts: tuple[Path, Path],
 ) -> None:
-    """The fixture's grid record carries no hashes. That has to skip, naming the key, rather
-    than pass on a comparison it never made."""
+    """The fixture's grid record carries no hashes. On a grid that small that has to skip,
+    naming the key, rather than pass on a comparison it never made."""
     _, cache = artifacts
     checks = vr.check_grid(cache)
     hashes = _named(checks, "sha256_lines")
     assert hashes and all(c.skipped for c in hashes)
     assert all("sha256_lines" in str(c.computed) for c in hashes)
+
+
+@pytest.mark.parametrize("key", ["sha256_lines", "sha256_drugs", "source_sha256"])
+def test_a_design_size_grid_missing_a_mandatory_field_fails(tmp_path: Path, key: str) -> None:
+    """Those fields are mandatory in the data contract, so their absence is a defect on the
+    design's own grid -- skipping there would be a check keyed on a missing input rather than on
+    the size of the run."""
+    _design_size_grid(tmp_path)
+    record = json.loads((tmp_path / "rung1_grid.json").read_text())
+    record[key] = {} if key == "source_sha256" else ""
+    (tmp_path / "rung1_grid.json").write_text(json.dumps(record, indent=2) + "\n")
+
+    checks = [c for c in vr.check_grid(tmp_path) if key in str(c.name) or key in str(c.computed)]
+    assert checks, f"no check covers {key}"
+    assert not any(c.skipped for c in checks), [(c.name, c.computed) for c in checks]
+    assert any(not c.ok for c in checks), [(c.name, c.computed) for c in checks]
+
+
+def test_a_design_size_run_without_component_ks_fails(tmp_path: Path) -> None:
+    """Ruling 36 requires the realized candidate counts in the sidecar: the chosen k in the
+    settings table means nothing without the set it was chosen from, so an absent record is a
+    failure on the design's grid, not a skip."""
+    _design_size_grid(tmp_path)
+    (tmp_path / "rung1_run.params.json").write_text(
+        json.dumps({"git_sha": "0" * 40, "inputs": {}, "seeds": {}}, indent=2) + "\n"
+    )
+    checks = _named(vr.check_params(tmp_path), "component counts")
+    assert checks, "no check covers the candidate component counts"
+    assert not any(c.skipped for c in checks), [(c.name, c.computed) for c in checks]
+    assert any(not c.ok for c in checks), [(c.name, c.computed) for c in checks]
 
 
 @pytest.mark.known_answer
@@ -420,6 +546,27 @@ def test_the_neighbour_count_claim_is_checked_against_its_own_candidates(
     components = _named(vr.check_settings(tmp_path), "component count is one of")
     assert components and all(c.ok and not c.skipped for c in components), [
         (c.name, c.computed) for c in components
+    ]
+
+
+def test_a_chosen_setting_with_no_candidate_set_fails_under_its_own_claim(tmp_path: Path) -> None:
+    """A k belonging to neither family -- no recorded component candidates, and not nearest
+    lines -- is a setting nothing declares a meaning for. It must fail under a claim about
+    candidate sets, not under the neighbour-count claim, whose text would then be failing while
+    naming models that are not nearest lines."""
+    _settings_only_run(tmp_path, 5)
+    (tmp_path / "rung1_run.params.json").write_text(json.dumps({"component_ks": {}}) + "\n")
+    checks = vr.check_settings(tmp_path)
+
+    unaccounted = _named(checks, "recorded candidate set")
+    assert unaccounted and any(not c.ok for c in unaccounted), [
+        (c.name, c.computed) for c in unaccounted
+    ]
+    assert any("nmf" in str(c.computed) for c in unaccounted)
+
+    neighbours = _named(checks, "neighbour counts")
+    assert neighbours and all(c.ok and not c.skipped for c in neighbours), [
+        (c.name, c.computed) for c in neighbours
     ]
 
 

@@ -132,6 +132,25 @@ DECLARED_COMPARISONS: dict[str, str] = {
     "lodo_stack_drug_vs_stack_cytokine": "lodo",
 }
 
+#: Design section 7 also reports, unadjusted, each ridge description against its own random
+#: stand-in: the control behind H1(b), since a description that beats its stand-in gained from
+#: what it describes rather than from the method every model shares. The run builds these ids in
+#: ``scripts/heldout_redraws.py``; they are enumerated here so that a run reporting none of them
+#: cannot pass a claim whose text says it covers them.
+STAND_IN_DESCRIPTIONS = ("expression", "pca", "nmf", "stack_base", "stack_cytokine", "stack_drug")
+
+STAND_IN_CONTRASTS: dict[str, str] = {
+    f"{scheme}_{description}_vs_random_{description}": scheme
+    for scheme in SCHEMES
+    for description in STAND_IN_DESCRIPTIONS
+}
+
+#: Every difference the run reports: 11 declared comparisons and 12 stand-in contrasts.
+ALL_CONTRASTS: dict[str, str] = {**DECLARED_COMPARISONS, **STAND_IN_CONTRASTS}
+
+#: The family whose numbers a promotion rests on: everything read off the redraw blocks.
+REDRAW_GROUP = "redraws"
+
 #: One figure per design section 8 bullet, and the tables each was drawn from. A figure whose
 #: source table was never written is a stage that did not run; a figure missing while its tables
 #: exist is a broken figure step, and the battery has to tell those apart.
@@ -167,6 +186,9 @@ class Check:
     left on scratch, a fixture grid smaller than the design's, a run that has not happened. A
     skipped check reports SKIP and does not fail the battery, so absence is stated rather than
     either hidden or dressed up as a failure -- and never counted as a pass.
+
+    ``group`` names the family a check belongs to, so ``exit_status`` can refuse a clean exit
+    when a family that carries the promoted numbers was skipped rather than run.
     """
 
     name: str
@@ -174,10 +196,11 @@ class Check:
     computed: str
     ok: bool
     skipped: bool = False
+    group: str = ""
 
 
-def skipped(name: str, why: str) -> Check:
-    return Check(name, "not checkable in this working tree", why, True, skipped=True)
+def skipped(name: str, why: str, group: str = "") -> Check:
+    return Check(name, "not checkable in this working tree", why, True, skipped=True, group=group)
 
 
 def sha256_of(path: Path, chunk: int = 1 << 20) -> str:
@@ -332,13 +355,31 @@ def check_grid(task_dir: Path, cache: Path | None = None) -> list[Check]:
             )
         )
 
+    design_grid = is_design_grid(record)
     for name, key, items in (
         (names[2], "sha256_lines", lines),
         (names[3], "sha256_drugs", drugs),
     ):
         recorded = str(record.get(key, ""))
         if not recorded:
-            checks.append(skipped(name, f"{GRID_JSON} records no {key}"))
+            # A missing field is a defect on the design's grid, not an excuse to skip: the
+            # restriction record's data contract names it, and skipping here would key the
+            # check on its own input being absent.
+            checks.append(
+                Check(
+                    name,
+                    f"{GRID_JSON} records no {key}",
+                    f"the restriction record's contract requires {key}, and this is the "
+                    f"design's {DESIGN_LINES} x {DESIGN_DRUGS} grid",
+                    False,
+                )
+                if design_grid
+                else skipped(
+                    name,
+                    f"{GRID_JSON} records no {key}; this grid is {grid_shape(record)}, a "
+                    "fixture rather than the design's",
+                )
+            )
             continue
         recomputed = sha256_items([str(item) for item in items])
         checks.append(
@@ -350,15 +391,27 @@ def check_grid(task_dir: Path, cache: Path | None = None) -> list[Check]:
             )
         )
 
-    checks.append(_check_grid_sources(record, names[4]))
+    checks.append(_check_grid_sources(record, names[4], design_grid))
     return checks
 
 
-def _check_grid_sources(record: dict[str, Any], name: str) -> Check:
+def _check_grid_sources(record: dict[str, Any], name: str, design_grid: bool) -> Check:
     """Each ``source_sha256`` entry against the file it names, where that file is in this tree."""
     sources = dict(record.get("source_sha256", {}))
     if not sources:
-        return skipped(name, f"{GRID_JSON} records no source_sha256")
+        if design_grid:
+            return Check(
+                name,
+                f"{GRID_JSON} records no source_sha256",
+                "the restriction record's contract requires it: without it nothing pins which "
+                "bytes of rung 0's tables the grid was built from",
+                False,
+            )
+        return skipped(
+            name,
+            f"{GRID_JSON} records no source_sha256; this grid is {grid_shape(record)}, a "
+            "fixture rather than the design's",
+        )
     matched, moved, unresolved = [], [], []
     for key, digest in sources.items():
         path = GRID_SOURCES.get(str(key))
@@ -668,7 +721,7 @@ def check_model_summary(task_dir: Path) -> list[Check]:
             if int(row["n_pairs"]) != len(values):
                 disagreeing.append(f"{model} (n_pairs)")
             sqrt_sb = float(row["sqrt_sb"])
-            if ceiling and not _close(sqrt_sb, ceiling.get(gene_set, float("nan")), 5e-5):
+            if gene_set in ceiling and not _close(sqrt_sb, ceiling[gene_set], 5e-5):
                 disagreeing.append(f"{model} (sqrt_sb)")
             worst_fraction = max(
                 worst_fraction, abs(float(row["fraction_of_ceiling"]) - mean_r / sqrt_sb)
@@ -685,11 +738,18 @@ def check_model_summary(task_dir: Path) -> list[Check]:
                     + (f"; disagreeing {disagreeing}" if disagreeing else ""),
                     worst_mean <= TOLERANCE and not disagreeing,
                 ),
+                # Without rung1_ceiling.csv the only denominator available is the summary's own
+                # sqrt_sb, so the arithmetic would check the table against itself. That is
+                # self-consistency, not verification, and it fails rather than passing quietly.
                 Check(
                     f"{key} fraction of the ceiling is the mean over √SB",
-                    f"{len(rows)} fractions against √SB {ceiling.get(gene_set, float('nan')):.4f}",
-                    f"largest difference {worst_fraction:.3e}",
-                    worst_fraction <= TOLERANCE,
+                    f"{len(rows)} fractions"
+                    + (f" against √SB {ceiling[gene_set]:.4f}" if gene_set in ceiling else ""),
+                    f"largest difference {worst_fraction:.3e}"
+                    if gene_set in ceiling
+                    else f"{task_dir / CEILING_CSV} is absent, so the reported fractions could "
+                    "only be read against the denominator the same table carries",
+                    gene_set in ceiling and worst_fraction <= TOLERANCE,
                 ),
                 Check(
                     f"{key} the interval contains the mean",
@@ -741,7 +801,10 @@ def check_comparisons(task_dir: Path, cache: Path | None = None) -> list[Check]:
                 )
                 for gene_set in GENE_SETS
             ]
-            + [skipped(name, f"{missing} does not exist") for name in redraw_names]
+            + [
+                skipped(name, f"{missing} does not exist", group=REDRAW_GROUP)
+                for name in redraw_names
+            ]
             + [
                 skipped(
                     f"comparisons: Holm within each test ({scheme})", f"{missing} does not exist"
@@ -763,14 +826,20 @@ def check_comparisons(task_dir: Path, cache: Path | None = None) -> list[Check]:
 
     reported = set(table["comparison"].astype(str))
     missing_declared = sorted(set(DECLARED_COMPARISONS) - reported)
+    missing_stand_ins = sorted(set(STAND_IN_CONTRASTS) - reported)
     per_contrast = table.groupby("comparison").size()
     checks = [
         Check(
             names[0],
             f"{len(reported)} contrasts x {len(GENE_SETS)} gene sets = {len(table)} rows",
-            f"design section 7 declares {len(DECLARED_COMPARISONS)} comparisons; missing "
-            f"{missing_declared}; rows per contrast {sorted(set(per_contrast.tolist()))}",
-            not missing_declared and set(per_contrast.tolist()) == {len(GENE_SETS)},
+            f"design section 7 declares {len(DECLARED_COMPARISONS)} comparisons and "
+            f"{len(STAND_IN_CONTRASTS)} description-versus-stand-in contrasts, "
+            f"{len(ALL_CONTRASTS)} in all; missing comparisons {missing_declared}; missing "
+            f"stand-in contrasts {missing_stand_ins}; rows per contrast "
+            f"{sorted(set(per_contrast.tolist()))}",
+            not missing_declared
+            and not missing_stand_ins
+            and set(per_contrast.tolist()) == {len(GENE_SETS)},
         )
     ]
     checks.extend(_check_estimates(table, population))
@@ -820,7 +889,7 @@ def _check_redraw_statistics(
     """The interval, p-value, MDE and design effect of every row, from the redraw blocks."""
     redraws, why = load_redraws(cache)
     if redraws is None:
-        return [skipped(name, why) for name in names]
+        return [skipped(name, why, group=REDRAW_GROUP) for name in names]
 
     worst = {"ci": 0.0, "p": 0.0, "mde": 0.0, "effect": 0.0}
     absent: list[str] = []
@@ -856,24 +925,28 @@ def _check_redraw_statistics(
             f"{len(table)} intervals in {COMPARISONS}",
             f"largest difference from the redraws' percentiles {worst['ci']:.3e}{trouble}",
             worst["ci"] <= TOLERANCE and clean,
+            group=REDRAW_GROUP,
         ),
         Check(
             names[1],
             f"{len(table)} two-sided p-values",
             f"largest difference {worst['p']:.3e}{trouble}",
             worst["p"] <= TOLERANCE and clean,
+            group=REDRAW_GROUP,
         ),
         Check(
             names[2],
             f"{len(table)} minimum detectable effects",
             f"largest difference from {MDE_FACTOR} x the redraw sd {worst['mde']:.3e}{trouble}",
             worst["mde"] <= TOLERANCE and clean,
+            group=REDRAW_GROUP,
         ),
         Check(
             names[3],
             f"{len(table)} design effects and width ratios",
             f"largest difference {worst['effect']:.3e}{trouble}",
             worst["effect"] <= TOLERANCE and clean,
+            group=REDRAW_GROUP,
         ),
     ]
     checks.append(_check_redraw_completeness(redraws, names[4]))
@@ -895,6 +968,7 @@ def _check_redraw_completeness(redraws: pd.DataFrame, name: str) -> Check:
         f"{len(counts) - len(wrong)} of {len(counts)} hold draws 0..{N_DRAWS - 1} once each"
         + (f"; wrong: {list(cast(Any, wrong).index)[:3]}" if len(wrong) else ""),
         len(wrong) == 0 and len(counts) > 0,
+        group=REDRAW_GROUP,
     )
 
 
@@ -1060,7 +1134,19 @@ def check_figures(task_dir: Path) -> list[Check]:
     ]
     directory = task_dir / "figures"
     if not directory.exists():
-        return [skipped(name, f"{directory} does not exist") for name in names]
+        if not (task_dir / MODEL_SUMMARY).exists():
+            return [skipped(name, f"{task_dir} holds no run yet") for name in names]
+        # The run wrote its tables, so this is a figure step that did not run -- which is
+        # exactly the case this pair of claims exists to tell apart from a stage never started.
+        return [
+            Check(
+                name,
+                f"{directory} does not exist",
+                "the run's tables are here, so the figures were not drawn",
+                False,
+            )
+            for name in names
+        ]
 
     real, missing = [], []
     for figure in FIGURES:
@@ -1101,6 +1187,7 @@ def check_settings(task_dir: Path, cache: Path | None = None) -> list[Check]:
         "settings: every round of both schemes recorded one row per model",
         "settings: every chosen component count is one of the run's candidates",
         "settings: nearest lines chose from the design's neighbour counts",
+        "settings: every chosen setting has a recorded candidate set to have come from",
     ]
     path = task_dir / SETTINGS
     record = grid_record(task_dir, cache)
@@ -1165,6 +1252,30 @@ def check_settings(task_dir: Path, cache: Path | None = None) -> list[Check]:
     # Every other k belongs to nearest lines, whose candidates are neighbour counts, not
     # components. A k from a model in neither group is a row nothing declares a meaning for.
     neighbours = chosen.loc[chosen["model"] == NEAREST_LINES]
+    if neighbours.empty:
+        checks.append(skipped(names[2], f"no {NEAREST_LINES} row of {SETTINGS} chose a k"))
+    else:
+        wrong = sorted(
+            {
+                f"{NEAREST_LINES} k={int(row['k'])}"
+                for _, row in neighbours.iterrows()
+                if int(row["k"]) not in NEAREST_LINES_KS
+            }
+        )
+        checks.append(
+            Check(
+                names[2],
+                f"{len(neighbours)} rows chose a neighbour count",
+                f"design section 5 offers {NEAREST_LINES_KS}"
+                + ("" if not wrong else f"; chosen outside them: {wrong[:5]}"),
+                not wrong,
+            )
+        )
+
+    # A k belonging to neither family is a setting nothing declares a meaning for -- ruling 36's
+    # hazard, since a chosen count is only interpretable against the set it was chosen from. It
+    # gets its own claim rather than being folded into the neighbour-count one, whose text would
+    # otherwise fail while naming models that are not nearest lines.
     unaccounted = sorted(
         {
             str(row["model"])
@@ -1172,24 +1283,17 @@ def check_settings(task_dir: Path, cache: Path | None = None) -> list[Check]:
             if str(row["model"]) not in candidates and str(row["model"]) != NEAREST_LINES
         }
     )
-    if neighbours.empty and not unaccounted:
-        checks.append(skipped(names[2], f"no {NEAREST_LINES} row of {SETTINGS} chose a k"))
-        return checks
-    wrong = sorted(
-        {
-            f"{NEAREST_LINES} k={int(row['k'])}"
-            for _, row in neighbours.iterrows()
-            if int(row["k"]) not in NEAREST_LINES_KS
-        }
-    )
     checks.append(
         Check(
-            names[2],
-            f"{len(neighbours)} rows chose a neighbour count",
-            f"design section 5 offers {NEAREST_LINES_KS}"
-            + ("" if not wrong else f"; chosen outside them: {wrong[:5]}")
-            + ("" if not unaccounted else f"; models with a k and no candidates: {unaccounted}"),
-            not wrong and not unaccounted,
+            names[3],
+            f"{len(chosen)} rows of {SETTINGS} chose a k",
+            f"components from {PARAMS_JSON}'s component_ks, neighbours from design section 5"
+            + (
+                ""
+                if not unaccounted
+                else f"; models with a chosen k and no candidate set: {unaccounted}"
+            ),
+            not unaccounted,
         )
     )
     return checks
@@ -1329,10 +1433,10 @@ def _check_component_ks(
     recorded = {
         str(model): [int(k) for k in ks] for model, ks in params.get("component_ks", {}).items()
     }
-    if not recorded:
-        return skipped(name, f"{PARAMS_JSON} records no component_ks")
+    # The size of the run decides whether this claim applies -- not whether the field the claim
+    # reads happens to be there. Ruling 36 requires component_ks in the sidecar, so on the
+    # design's grid its absence is the failure, and it is tested before the record is read.
     record = grid_record(task_dir, cache)
-    models_missing = sorted(set(TUNED_MODELS) - set(recorded))
     if record is not None and not is_design_grid(record):
         return skipped(
             name,
@@ -1340,6 +1444,15 @@ def _check_component_ks(
             f"{DESIGN_LINES} x {DESIGN_DRUGS}, where fewer candidates are legitimate "
             f"(recorded: {recorded})",
         )
+    if not recorded:
+        return Check(
+            name,
+            f"{PARAMS_JSON} records no component_ks",
+            "ruling 36 requires it: the chosen k in the settings table means nothing without "
+            "the candidate set it was chosen from",
+            False,
+        )
+    models_missing = sorted(set(TUNED_MODELS) - set(recorded))
     wrong = sorted(model for model, ks in recorded.items() if ks != COMPONENT_KS)
     return Check(
         name,
@@ -1398,6 +1511,29 @@ Not checkable here, stated rather than hidden:
 """
 
 
+def exit_status(checks: Sequence[Check], *, design_grid: bool) -> int:
+    """The battery's exit code: 0 only when it actually verified this run.
+
+    Three ways to earn a non-zero status, and the last two are the ones a note to a human would
+    not have caught:
+
+    * **a check failed** -- a document and an artifact disagree;
+    * **nothing ran.** Every check skipped is green continuous integration over an unverified
+      run: a task folder holding one table would otherwise print "0 / 0 checks pass" and exit 0;
+    * **the redraw family was skipped on the design's own grid.** The intervals, p-values,
+      minimum detectable effects and design effects are what a promotion rests on, and the
+      realistic way to lose them is a purged scratch cache -- which must not pass silently. On a
+      fixture grid the same skip is legitimate and does not fail the battery.
+    """
+    if any(not check.ok for check in checks):
+        return 1
+    if not any(not check.skipped for check in checks):
+        return 1
+    if design_grid and any(check.skipped and check.group == REDRAW_GROUP for check in checks):
+        return 1
+    return 0
+
+
 def render(checks: list[Check]) -> str:
     lines: list[str] = []
     for check in checks:
@@ -1434,9 +1570,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"no run to verify: {task_dir / MODEL_SUMMARY} does not exist.")
         print("Run the fit, redraw and combine stages first, or pass --task-dir.")
         return 2
+    resolved = resolve_cache(task_dir, ns.cache)
+    record = grid_record(task_dir, resolved)
     checks = run_all_checks(task_dir, cache=ns.cache)
     print(render(checks))
-    return 0 if all(check.ok for check in checks) else 1
+    status = exit_status(checks, design_grid=record is None or is_design_grid(record))
+    if status != 0 and all(check.ok for check in checks):
+        print(
+            "FAILING anyway: the battery did not verify what it was asked to. Every check above "
+            "that says SKIP is a claim nothing here answered -- pass --cache if the run's "
+            "redraw blocks are on scratch."
+        )
+    return status
 
 
 if __name__ == "__main__":

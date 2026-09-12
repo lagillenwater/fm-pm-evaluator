@@ -58,7 +58,7 @@ select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
 [tool.pyright]
 pythonVersion = "3.11"
 typeCheckingMode = "strict"
-include = ["src", "tests"]
+include = ["src", "tests", "scripts/verify_rung1.py"]
 strictListInference = true
 strictDictionaryInference = true
 strictSetInference = true
