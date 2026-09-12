@@ -11,8 +11,8 @@
 #SBATCH --output=logs/%x-%j.out
 #SBATCH --error=logs/%x-%j.out
 #
-# Rung 0 noise per drug / per line and rung 1 held-out prediction, five tables, one job:
-# duckdb over the rung 0 frame cache and 100 raw shards strided across the set, three Stack embeddings of the 50
+# Rung 0 noise per drug / per line and rung 1 held-out prediction, three tables, one job:
+# duckdb over the rung 0 frame cache and every third raw shard, three Stack embeddings of synthetic cells drawn from each of the 49
 # lines' baseline, then the fold loop. Results land on scratch; pull the CSVs from
 # $OUT_DIR, nothing is committed by this job.
 set -euo pipefail
@@ -21,8 +21,8 @@ REPO="${REPO:-$SLURM_SUBMIT_DIR}"
 cd "$REPO"
 source scripts/alpine/rung1_env.sh
 
-CACHE="${RUNG1_SIMPLE_CACHE:-/scratch/alpine/$USER/rung1_simple/cache}"
-OUT_DIR="${RUNG1_SIMPLE_OUT:-/scratch/alpine/$USER/rung1_simple/results}"
+CACHE="${RUNG1_SIMPLE_CACHE:-/scratch/alpine/$USER/rung1_simple/cache_v2}"
+OUT_DIR="${RUNG1_SIMPLE_OUT:-/scratch/alpine/$USER/rung1_simple/results_v2}"
 echo "commit=$(git rev-parse --short HEAD) job=$SLURM_JOB_ID cache=$CACHE out=$OUT_DIR"
 
 python scripts/rung1_simple_tables.py \
