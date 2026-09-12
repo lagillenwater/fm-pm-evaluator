@@ -50,6 +50,11 @@ lines' responses to the same drug, so every column is the same kind of object:
                   only for the departure: drug mean + (Stack's prediction for l* minus Stack's
                   mean prediction over the training lines).
 
+With ``--real-cells`` (real_cells_5um.h5ad from scripts/tahoe_real_cells.py) every cell in the
+set is a real Tahoe cell: the prompt and query are real DMSO cells, the context real treated
+cells at 5 uM. That is the rung 1 Stack column proper; the synthetic-cell run is kept as the
+bridge variant rung 2 evaluates. Without it, cells are synthesised:
+
 How a line's expression reaches Stack. Stack is a single-cell model trained on raw UMI counts
 (~10^4 per cell, most genes at zero). Each line's baseline profile (mean DESeq2 baseMean over
 its contrasts in every third raw shard) is normalised to gene probabilities and cells are drawn
@@ -247,13 +252,29 @@ def generate(args: argparse.Namespace) -> None:
     import anndata as ad
     from stack.model_loading import load_model_from_checkpoint
 
-    t = np.load(args.cache / "tensors.npz", allow_pickle=True)
-    E, Y, lines, drugs, genes = t["E"], t["Y"], t["lines"], t["drugs"], pd.Index(t["genes"])
+    from scipy import sparse
+
+    t = np.load(args.tensors or (args.cache / "tensors.npz"), allow_pickle=True)
+    E, Y, lines, drugs, genes = t["E"], t["Y"], [str(x) for x in t["lines"]], [str(x) for x in t["drugs"]], pd.Index(t["genes"])
     n_l, n_d = len(lines), len(drugs)
     stack_genes = load_stack_genes(args.genelist)
     if stack_genes is None:
         raise FileNotFoundError(f"gene list {args.genelist} is required to generate")
     stack_in_ours = genes.get_indexer(stack_genes)  # -1 where Stack's gene is not in the table
+    real = None
+    if args.real_cells:
+        import anndata as ad
+
+        real = ad.read_h5ad(args.real_cells)
+        assert list(real.var_names) == list(genes), "real cells must be over the rung 1 gene table"
+        real_ctrl = {ln: real[(real.obs["line"] == ln) & (real.obs["kind"] == "control")].X.tocsr() for ln in lines}
+        log(f"real cells: {real.n_obs}; control cells per line min {min(m.shape[0] for m in real_ctrl.values())}")
+
+    def per_1e4(M) -> np.ndarray:
+        """Mean profile of a cell block, in counts per 10^4 (so real and synthetic depths compare)."""
+        M = sparse.csr_matrix(M)
+        lib = np.asarray(M.sum(1)).ravel()
+        return np.asarray(M.multiply(1e4 / np.maximum(lib, 1)[:, None]).mean(0)).ravel()
     todo = [m for m in GEN_MODELS if args.gen_model in (None, m)]
     for model_name in todo:
         out = args.cache / f"gen_{model_name}.npy"
@@ -267,19 +288,42 @@ def generate(args: argparse.Namespace) -> None:
         model = load_model_from_checkpoint(ckpt, model_class="ICL_FinetunedModel")
         n_set = int(model.n_cells)
         rng = np.random.default_rng(STACK_SEED)
-        base_pool = draw_cells(profile_probabilities(E), n_set // 4, rng)  # n_set/4 baseline cells per line
+        if real is None:
+            base_pool = draw_cells(profile_probabilities(E), n_set // 4, rng)  # n_set/4 baseline cells per line
+        else:
+            base_pool = sparse.vstack([real_ctrl[ln][: n_set // 4] for ln in lines]).tocsr()  # the first n_set/4 real DMSO cells
         line_of_base = np.repeat(np.arange(n_l), n_set // 4)
-        base_mean = np.stack([np.asarray(base_pool[line_of_base == i].mean(0)).ravel() for i in range(n_l)])  # (line, gene)
+        base_mean = np.stack([per_1e4(base_pool[line_of_base == i]) for i in range(n_l)])  # (line, gene), per 10^4
         k_treated = int(np.ceil((n_set // 2) / (n_l - 1))) + 1
         pred_lfc = np.full((n_l, n_d, len(stack_genes)), np.nan, dtype=np.float32)
         log(f"{model_name}: set size {n_set}; prompt {n_set // 4} / context {n_set - 2 * (n_set // 4)} / query {n_set // 4}; "
-            f"{k_treated} treated cells drawn per training line per drug")
+            f"{'real' if real is not None else 'synthetic'} cells; {k_treated} treated cells per training line per drug when drawn")
         for j in range(n_d):
             t0 = time.time()
-            treated_pool = draw_cells(profile_probabilities(E, Y[:, j, :]), k_treated, rng)
-            line_of_treated = np.repeat(np.arange(n_l), k_treated)
+            if real is None:
+                treated_pool = draw_cells(profile_probabilities(E, Y[:, j, :]), k_treated, rng)
+                line_of_treated = np.repeat(np.arange(n_l), k_treated)
+                held_out = np.arange(n_l)
+            else:
+                blocks, owners = [], []
+                for i, ln in enumerate(lines):
+                    M = real[(real.obs["line"] == ln) & (real.obs["drug"] == drugs[j])].X
+                    if M.shape[0]:
+                        blocks.append(sparse.csr_matrix(M))
+                        owners.append(np.full(M.shape[0], i))
+                if not blocks:
+                    log(f"{model_name}: drug {j + 1}/{n_d} {drugs[j]}: no real treated cells, skipped")
+                    continue
+                treated_pool = sparse.vstack(blocks).tocsr()
+                line_of_treated = np.concatenate(owners)
+                # a line can be held out only if the other lines still supply a full context block
+                n_context_needed = n_set - 2 * (n_set // 4)
+                held_out = np.array([i for i in range(n_l) if (line_of_treated != i).sum() >= n_context_needed])
+                if len(held_out) == 0:
+                    log(f"{model_name}: drug {j + 1}/{n_d} {drugs[j]}: {treated_pool.shape[0]} treated cells, too few for a context, skipped")
+                    continue
             X, query_rows, n_query, n_prompt, n_context = assemble_sets(
-                n_set, base_pool, treated_pool, line_of_base, line_of_treated, np.arange(n_l), rng)
+                n_set, base_pool, treated_pool, line_of_base, line_of_treated, held_out, rng)
             adata = ad.AnnData(X=X)
             adata.var_names = list(genes)
             adata.var["feature_name"] = list(genes)
@@ -288,11 +332,14 @@ def generate(args: argparse.Namespace) -> None:
                 cell_ratio=n_prompt / n_set, context_ratio=n_context / n_set,
                 batch_size=args.gen_batch, num_workers=0, random_seed=STACK_SEED, show_progress=False,
             )
-            mean_pred = np.asarray(mean_pred, dtype=np.float32).reshape(n_l, n_set, -1)
-            gen = mean_pred[:, n_set - n_query:, :].mean(1)  # (line, stack gene): generated treated counts per 10^4
-            base = np.where(stack_in_ours >= 0, base_mean[:, np.maximum(stack_in_ours, 0)], np.nan)
-            pred_lfc[:, j, :] = np.log2((gen + EPS_COUNTS) / (base + EPS_COUNTS))
-            log(f"{model_name}: drug {j + 1}/{n_d} {drugs[j]} ({time.time() - t0:.0f}s)")
+            mean_pred = np.asarray(mean_pred, dtype=np.float32).reshape(len(held_out), n_set, -1)
+            q = mean_pred[:, n_set - n_query:, :]  # expected treated counts of each query cell, at its own library
+            lib_q = np.asarray(base_pool[query_rows.ravel()].sum(1)).ravel().reshape(len(held_out), n_query)  # query libraries
+            gen = (q * (1e4 / np.maximum(lib_q, 1))[:, :, None]).mean(1)  # (held-out line, stack gene), per 10^4
+            base = np.where(stack_in_ours >= 0, base_mean[held_out][:, np.maximum(stack_in_ours, 0)], np.nan)
+            pred_lfc[held_out, j, :] = np.log2((gen + EPS_COUNTS) / (base + EPS_COUNTS))
+            log(f"{model_name}: drug {j + 1}/{n_d} {drugs[j]}: {len(held_out)} held-out lines, "
+                f"{treated_pool.shape[0]} treated cells in the pool ({time.time() - t0:.0f}s)")
         np.save(out, pred_lfc)
         log(f"{model_name}: wrote {out.name} {pred_lfc.shape}")
         del model
@@ -356,7 +403,7 @@ class LatentShift:
 
 
 def score(args: argparse.Namespace, noise_drug: pd.DataFrame) -> None:
-    t = np.load(args.cache / "tensors.npz", allow_pickle=True)
+    t = np.load(args.tensors or (args.cache / "tensors.npz"), allow_pickle=True)
     Y, D, E, H0, H1 = t["Y"], t["D"], t["E"], t["H0"], t["H1"]
     lines, drugs, genes = pd.Index(t["lines"]), pd.Index(t["drugs"]), pd.Index(t["genes"])
     n_l, n_d, n_g = Y.shape
@@ -451,6 +498,8 @@ def main() -> None:
     ap.add_argument("--cache", type=Path, required=True, help="where tensors and generations go")
     ap.add_argument("--out", type=Path, required=True, help="where the tables go")
     ap.add_argument("--gen-model", choices=tuple(GEN_MODELS), default=None, help="generate for one checkpoint only")
+    ap.add_argument("--real-cells", type=Path, default=None, help="real_cells_5um.h5ad: real cells for prompt, context and query")
+    ap.add_argument("--tensors", type=Path, default=None, help="tensors.npz to reuse (default: <cache>/tensors.npz)")
     ap.add_argument("--gen-batch", type=int, default=2, help="in-context sets per forward pass")
     ap.add_argument("--shard-stride", type=int, default=3)
     ap.add_argument("--duckdb-memory", default="40GB")
@@ -460,7 +509,7 @@ def main() -> None:
     args.out.mkdir(parents=True, exist_ok=True)
 
     noise_drug, _ = rung0_tables(args.per_pair, args.out)
-    if args.stage in ("build", "all"):
+    if args.stage in ("build", "all") and not args.tensors:
         build(args)
     if args.stage in ("generate", "all"):
         generate(args)
@@ -469,6 +518,7 @@ def main() -> None:
     (args.out / "run.json").write_text(json.dumps({
         "stage": args.stage, "dose": DOSE, "alpha": ALPHA, "k": K_NEIGHBOURS, "n_components": N_COMPONENTS,
         "shard_stride": args.shard_stride, "stack_library": STACK_LIBRARY, "eps_counts": EPS_COUNTS,
+        "real_cells": str(args.real_cells) if args.real_cells else None,
         "finished": time.strftime("%Y-%m-%d %H:%M:%S")}, indent=2))
 
 
