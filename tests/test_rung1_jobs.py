@@ -474,6 +474,18 @@ def test_each_fit_stage_calls_its_cli_with_every_required_flag(
         assert flag in text, f"{name} calls {script} without {flag}"
 
 
+def test_the_fit_array_can_be_told_to_wait_for_the_data_stage() -> None:
+    """``--stage data`` and ``--stage fit`` are separate chains, so the fit array depends on the
+    answers, the embeddings and the descriptions only when it is given a job id to wait on: 157
+    tasks started against a missing answers.npz would fail 157 times in seconds. The script has
+    to offer that dependency, confirm it, and say plainly that it is not automatic."""
+    text = CHAIN_SH.read_text()
+    assert "--after)" in text, "the chain script takes no --after job id"
+    assert 'AFTER_DEP="--dependency=afterok:$AFTER"' in text
+    assert 'check_dependency "$FIT" "afterok:$AFTER"' in text
+    assert "does NOT wait" in text, "the script does not say the two stages are separate chains"
+
+
 def test_the_redraws_and_the_combine_wait_for_the_whole_array_before_them() -> None:
     """``load_pair_scores`` refuses until all 157 rounds are done, and the combine until all 8
     blocks are: each must depend on the whole array job id, never on one task of it."""

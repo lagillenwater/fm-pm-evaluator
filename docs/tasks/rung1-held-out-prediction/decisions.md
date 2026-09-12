@@ -199,6 +199,30 @@ document they amend. `design.md` carries the current position.
   - **What the check guards against:** a random description gaining. That leak lies entirely above zero.
   - **The other case:** the one defect a lower bound could catch, a penalty chosen too small, is already caught
     by the null test's requirement that the stand-in's penalty sit at the top.
+- **2026-09-11** — **Recorded departure (ruling 42): the p-value is the +1 resampling estimator,
+  not the literal "twice the share of redraws past zero".**
+  - **What design §7 says:** "p-value: twice the share of redraws past zero."
+  - **What the code computes** (`src/fmharness/heldout/comparisons.py`, and what
+    `scripts/verify_rung1.py` verifies): `p = min(1, 2 · min((1 + #{draws ≤ 0}) / (1 + B),
+    (1 + #{draws ≥ 0}) / (1 + B)))`.
+  - **Why the code stays:** the +1 form is the standard finite-resample estimator. The literal
+    text can return exactly 0 from 2,000 draws, which claims more resolution than a resample
+    has; the +1 form's floor is 2/2001 ≈ 0.001, which is what 2,000 draws can actually say.
+  - **Standing:** the battery checks the convention the code uses, not the design sentence, so
+    this entry is the record of the difference rather than a silent reconciliation. The design
+    text is left as written; a later edit to §7 would say the same thing in symbols.
+- **2026-09-11** — **Recorded deviation (ruling 43): the fit and redraw array sizes are pinned to
+  the design's own constants, not to `rung1_env.sh`.**
+  - **The rule:** plan.md's task 11 puts the array sizes in one place, `scripts/alpine/rung1_env.sh`,
+    which declares `N_ANSWER_PARTS`, `N_DMSO_BLOCKS` and `DMSO_CONCURRENCY`.
+  - **What was done instead:** `rung1_fit.sbatch`'s `--array=0-156` and its `N_LOLO_ROUNDS=50` /
+    `N_LODO_ROUNDS=107` are cross-checked against `scripts/heldout_fit.py`'s `FULL_GRID_LINES`
+    and `FULL_GRID_DRUGS`, and `rung1_redraws.sbatch`'s `--array=0-7` against
+    `fmharness.heldout.comparisons.N_BLOCKS` (`tests/test_rung1_jobs.py`).
+  - **Why it stays:** those are the constants the run itself uses. An environment variable can
+    drift from them silently — nothing would fail if `N_FIT_ROUNDS` disagreed with the grid the
+    fits actually run over — whereas a test against the module constant cannot.
+  - **Scope:** the data stages are unchanged and still read their sizes from the env file.
 - **2026-09-11** — **The two-way redraw reports both the variance ratio and its square root.**
   - **Why:** the design says "report how much wider intervals get". The square root of the variance ratio is the
     ratio of interval widths, and the variance ratio is kept as the design effect.

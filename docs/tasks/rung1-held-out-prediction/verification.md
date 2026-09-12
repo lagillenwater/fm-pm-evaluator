@@ -35,16 +35,23 @@ run to. Job ids, nodes, wall times and peak memory are filled in from
 | DMSO combine | `rung1_dmso_combine.sbatch` | 8 cores, 30G, 3 h | the whole DMSO array | not yet run |
 | Stack embeddings (GPU array 0-2) | `rung1_embed.sbatch` | ah200, 8 cores, 64G, 4 h | DMSO combine | not yet run |
 | descriptions | `rung1_descriptions.sbatch` | 8 cores, 30G, 3 h | DMSO combine | not yet run |
-| **fit (array 0-156)** | `rung1_fit.sbatch` | 4 cores, 15G, 2 h | answers combine, embeddings, descriptions | not yet run |
+| **fit (array 0-156)** | `rung1_fit.sbatch` | 4 cores, 15G, 2 h | **nothing, unless `--after <job id>` is given** (see below) | not yet run |
 | **redraws (array 0-7)** | `rung1_redraws.sbatch` | 2 cores, 7,680M, 2 h | the **whole** fit array | not yet run |
 | **combine** | `rung1_combine.sbatch` | 4 cores, 15G, 3 h | the **whole** redraw array | not yet run |
 
 Every CPU job's memory is a whole number of Alpine cores at 3,840 MB each (PROCESS §2), and the
 three fit-stage jobs are sized from task 10's measurements: a round holds about 2.2 GB of answer
 arrays plus `models.MAX_BYTES` (2 GiB) of working blocks, and the combine was measured at 8 GB
-and about an hour, CPU only. The chain is submitted by
-`scripts/alpine/submit_rung1_chain.sh --stage data` and then `--stage fit`, each dependency read
-back with `ralpine jobinfo`.
+and about an hour, CPU only.
+
+**What the chain enforces, and what the operator must sequence.** Within each stage every
+dependency in the table above is a real `--dependency=afterok`, submitted by
+`scripts/alpine/submit_rung1_chain.sh` and read back with `ralpine jobinfo`. **Between** the two
+stages there is none: `--stage data` and `--stage fit` are separate chains, so the fit array does
+not wait for the answers, the embeddings and the descriptions unless it is told to. Run
+`--stage fit` only after the data stage has finished, or pass
+`--stage fit --after <the last data job's id>`, which gives the fit array that dependency and
+confirms it. Starting 157 tasks against a missing `answers.npz` would fail 157 times in seconds.
 
 ## Commands run locally, and what they returned
 

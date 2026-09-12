@@ -18,13 +18,18 @@
 #   scripts/alpine/submit_rung1_chain.sh --stage data --from embed   # everything but embed +
 #                                                                    # descriptions done
 #   scripts/alpine/submit_rung1_chain.sh --stage fit                 # rounds, redraws, combine
+#   scripts/alpine/submit_rung1_chain.sh --stage fit --after 1234567 # ... waiting on a data job
 #   scripts/alpine/submit_rung1_chain.sh --stage fit --from redraws  # the 157 rounds are done
 #   scripts/alpine/submit_rung1_chain.sh --stage fit --from combine  # the redraws are done too
+#
+# The two stages are separate chains: --stage fit does NOT wait for --stage data unless you pass
+# --after <job id>. Run it after the data stage finishes, or give it that id.
 set -euo pipefail
 
 RALPINE="$(dirname "${BASH_SOURCE[0]}")/ralpine"
 STAGE=""
 FROM=""
+AFTER=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -34,6 +39,13 @@ while [[ $# -gt 0 ]]; do
       ;;
     --from)
       FROM="${2:?--from needs a stage: grid, answers, dmso, embed (data); fit, redraws, combine (fit)}"
+      shift 2
+      ;;
+    --after)
+      # The fit array's own dependency. The data stage is a separate chain, so nothing here
+      # enforces that the answers, embeddings and descriptions are finished: pass the job id
+      # they end with and the fit array waits on it, or submit the fit stage once they are done.
+      AFTER="${2:?--after needs a job id the fit array should wait for}"
       shift 2
       ;;
     *)
@@ -50,6 +62,11 @@ case "$STAGE" in
   fit) FROM="${FROM:-fit}" ;;
   *) echo "--stage must be one of: data, fit" >&2; exit 1 ;;
 esac
+if [[ -n "$AFTER" && "$STAGE" != "fit" ]]; then
+  # Silently ignoring it would leave the operator believing a dependency was set.
+  echo "--after applies to --stage fit (the fit array); --stage $STAGE has its own chain" >&2
+  exit 1
+fi
 case "$STAGE:$FROM" in
   data:grid|data:answers|data:dmso|data:embed) ;;
   fit:fit|fit:redraws|fit:combine) ;;
@@ -77,13 +94,24 @@ check_dependency() {
 # waits on the WHOLE array before it, never on one task of it: heldout_redraws.py refuses to run
 # until all 157 rounds have valid completion records, and heldout_combine.py until all 8 blocks
 # do, since a comparison taken over some of them is silently a different comparison.
+#
+# What this script does NOT enforce: the data stage is a separate chain, so the fit array has no
+# dependency on the answers, the embeddings or the descriptions unless one is given. Submit
+# --stage fit only once those are done, or pass --after <job id> and the array waits on it --
+# 157 tasks started against a missing answers.npz would each fail in seconds.
 if [[ "$STAGE" == "fit" ]]; then
   FIT_DEP=""
   if [[ "$FROM" == "fit" ]]; then
-    out="$("$RALPINE" submit scripts/alpine/rung1_fit.sbatch)"
+    AFTER_DEP=""
+    [[ -n "$AFTER" ]] && AFTER_DEP="--dependency=afterok:$AFTER"
+    out="$("$RALPINE" submit scripts/alpine/rung1_fit.sbatch ${AFTER_DEP:+"$AFTER_DEP"})"
     FIT="$(job_id "$out")"
     echo "fit array:         job $FIT"
+    [[ -n "$AFTER_DEP" ]] && check_dependency "$FIT" "afterok:$AFTER"
     FIT_DEP="--dependency=afterok:$FIT"
+  elif [[ -n "$AFTER" ]]; then
+    echo "--after applies to the fit array, which --from $FROM does not submit" >&2
+    exit 1
   fi
 
   REDRAWS_DEP=""
