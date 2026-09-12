@@ -78,7 +78,7 @@ from fmharness.heldout.descriptions import (
     random_stand_in,
     standardize,
 )
-from fmharness.heldout.figures import null_panel_comparisons
+from fmharness.heldout.figures import fig_build, null_panel_comparisons
 from fmharness.heldout.grid import (
     SCIPLEX_CIDS,
     SCIPLEX_LINE,
@@ -87,6 +87,7 @@ from fmharness.heldout.grid import (
     load_grid,
 )
 from fmharness.heldout.leakage import LeakageProfile, leakage_profiles
+from fmharness.heldout.models import MAX_BYTES
 from fmharness.heldout.records import is_done, sha256_file
 from fmharness.heldout.scoring import GENE_SETS, fraction_of_ceiling
 
@@ -1456,6 +1457,88 @@ def test_a_weights_check_missing_a_key_is_refused(
     (out_dir / "rung1_weights_check.json").write_text(json.dumps({}) + "\n")
     with pytest.raises(SystemExit, match="weights"):
         hc.read_build_tables(out_dir)
+
+
+@pytest.mark.step_build
+def test_the_build_figure_refuses_a_weights_check_missing_its_keys(
+    run_dirs: dict[str, Path], tmp_path: Path
+) -> None:
+    """The same defect as the control above, one step later, in the figure that DRAWS the claim.
+
+    Panel (b) of ``01_build.png`` prints "drug fine-tune encoder differs from the base: True
+    (N tensors differ)". Read through ``dict.get`` defaults, an empty or renamed
+    ``rung1_weights_check.json`` draws exactly that reassuring sentence with "?" for the count --
+    H2's premise asserted from a file nothing read. Indexed, the figure raises instead.
+    """
+    matches, grids, cells, weights = hc.read_build_tables(run_dirs["out_staged"])
+    assert fig_build(cells, matches, grids, weights, tmp_path / "build.png").exists()
+
+    for missing in ("identical_all", "n_different"):
+        partial = {key: value for key, value in weights.items() if key != missing}
+        with pytest.raises(KeyError, match=missing):
+            fig_build(cells, matches, grids, partial, tmp_path / f"no_{missing}.png")
+
+
+@pytest.mark.step_build
+def test_the_build_tables_keep_the_cell_line_named_na(tmp_path: Path) -> None:
+    """One of the 50 grid lines has the literal DepMap identifier ``NA`` (design.md section 2).
+
+    Read with pandas' default missing-value handling it becomes a float NaN, and that line
+    reaches ``01_build.png``'s panel (a) and every identity grid labelled "nan": a real value
+    read as an absence, in a published figure. ``scripts/verify_rung1.py``'s reader has carried
+    the guard from the start; the combine's did not.
+    """
+    out_dir = tmp_path / "out"
+    write_build_tables(out_dir)
+    named = ["rung1_cells.csv"] + [f"rung1_identity_grid_{d}.csv" for d in BUILD_DESCRIPTIONS]
+    for name in named:
+        path = out_dir / name
+        path.write_text(path.read_text().replace(LINES[0], "NA"))
+
+    _matches, grids, cells, _weights = hc.read_build_tables(out_dir)
+
+    assert "NA" in set(cells["line"]), "the line named NA was read as a missing value"
+    assert not cells["line"].isna().any()
+    for description, grid_table in grids.items():
+        assert "NA" in set(grid_table["line_a"]), description
+        assert not grid_table[["line_a", "line_b"]].isna().to_numpy().any(), description
+
+
+@pytest.mark.step_fit
+def test_the_fit_memory_budget_comes_from_the_command_line(
+    run_dirs: dict[str, Path], tmp_path: Path
+) -> None:
+    """``--max-bytes`` reaches the fitters.
+
+    Without it every round ran at ``models.MAX_BYTES`` (2 GiB) whatever the job asked for, so
+    the tuning pass raises above roughly 81,800 genes instead of using the memory the job holds
+    -- on all 157 array tasks at once, fixable only by editing a constant and redeploying. A
+    budget too small for one drug's working arrays must raise from inside the fit, which is what
+    shows the flag arrived there rather than being parsed and dropped.
+    """
+    assert hf.load_inputs(load_grid(run_dirs["grid"]), run_dirs["staged"]).max_bytes == MAX_BYTES
+
+    cache = tmp_path / "cache"
+    shutil.copytree(run_dirs["staged"], cache)
+    for path in cache.glob("scores_lolo_000.parquet*"):
+        path.unlink()
+
+    with pytest.MonkeyPatch.context() as mp:
+        _run_cli_args = [
+            "--scheme",
+            "lolo",
+            "--round",
+            "0",
+            "--grid",
+            str(run_dirs["grid"]),
+            "--cache",
+            str(cache),
+            "--max-bytes",
+            "1",
+        ]
+        mp.setattr(sys, "argv", ["heldout_fit.py", *_run_cli_args])
+        with pytest.raises(ValueError, match="max_bytes"):
+            hf.main()
 
 
 @pytest.mark.step_score

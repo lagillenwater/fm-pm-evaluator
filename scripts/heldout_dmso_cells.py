@@ -414,10 +414,14 @@ def write_line_h5ad(
     """
     import anndata as ad  # local import: only this function needs it
 
-    adata = ad.AnnData(X=counts.astype(np.float32), obs=obs.reset_index(drop=True))
-    adata.obs_names = [str(i) for i in range(adata.n_obs)]
-    adata.var_names = list(panel_syms)
-    adata.var["feature_name"] = panel_syms
+    # obs and var carry STRING indexes before the AnnData exists. Handed a frame indexed any
+    # other way, anndata converts it and emits ImplicitModificationWarning -- and the project's
+    # binding constraint is that test output is pristine. Repairing ``obs_names``/``var_names``
+    # after construction leaves the warning already emitted, which is what this did.
+    labelled = obs.reset_index(drop=True)
+    labelled.index = pd.Index([str(i) for i in range(len(labelled))])
+    var = pd.DataFrame({"feature_name": list(panel_syms)}, index=pd.Index(list(panel_syms)))
+    adata = ad.AnnData(X=counts.astype(np.float32), obs=labelled, var=var)
     path.parent.mkdir(parents=True, exist_ok=True)
     adata.write_h5ad(path)
 

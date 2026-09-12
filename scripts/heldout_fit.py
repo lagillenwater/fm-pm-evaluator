@@ -34,7 +34,12 @@ Reads from ``--cache``: ``answers.npz``, ``descriptions.npz``, ``tanimoto.npz`` 
 
     uv run python scripts/heldout_fit.py --scheme lolo --round 0 \\
         --grid docs/tasks/rung1-held-out-prediction/rung1_grid.json \\
-        --cache /scratch/alpine/$USER/rung1_cache
+        --cache /scratch/alpine/$USER/rung1_cache \\
+        --max-bytes 10737418240
+
+``--max-bytes`` is the budget the fits size their working blocks against. It defaults to
+``models.MAX_BYTES`` (2 GiB); the Alpine job passes the memory it asked Slurm for, less what the
+answer arrays hold, so a round uses the machine it was given rather than a library constant.
 """
 
 # pandas ships no PEP-561 type stubs in this environment; under strict mode that turns every
@@ -67,6 +72,7 @@ from fmharness.heldout.descriptions import (  # noqa: E402
 )
 from fmharness.heldout.grid import Grid, load_grid  # noqa: E402
 from fmharness.heldout.models import (  # noqa: E402
+    MAX_BYTES,
     Fit,
     drug_average,
     nearest_lines_lolo,
@@ -130,6 +136,12 @@ class RoundInputs:
     entry built from its own stand-in matrix, and cannot be fitted on the description it stands
     in for. ``similarity`` is the line-by-line correlation nearest lines ranks by; ``tanimoto``
     is the drugs' chemical similarity in grid order.
+
+    ``max_bytes`` is the budget every fit in the round sizes its working blocks against. It
+    belongs to the round rather than to the models because it is a property of the machine the
+    round was given: the job asks Slurm for memory, and the fits must use that figure. Left at
+    ``models.MAX_BYTES`` the tuning pass raises on a wide enough gene panel however much memory
+    the job actually holds.
     """
 
     grid: Grid
@@ -141,6 +153,7 @@ class RoundInputs:
     components: dict[str, dict[int, np.ndarray]]
     similarity: np.ndarray
     tanimoto: np.ndarray
+    max_bytes: int = MAX_BYTES
 
 
 def models_for(scheme: Scheme) -> list[ModelSpec]:
@@ -256,7 +269,7 @@ def _tanimoto(cache: Path, grid: Grid) -> np.ndarray:
     return similarity
 
 
-def load_inputs(grid: Grid, cache: Path) -> RoundInputs:
+def load_inputs(grid: Grid, cache: Path, max_bytes: int = MAX_BYTES) -> RoundInputs:
     """Read the cache once: answers, scoreable masks, every model's own matrices, the
     nearest-lines similarity and the drugs' chemical similarity.
 
@@ -310,6 +323,7 @@ def load_inputs(grid: Grid, cache: Path) -> RoundInputs:
         components=components,
         similarity=similarity_from_description(descriptions["expression"]),
         tanimoto=_tanimoto(cache, grid),
+        max_bytes=max_bytes,
     )
 
 
@@ -349,11 +363,15 @@ def _fit_lolo(spec: ModelSpec, index: int, inputs: RoundInputs) -> Fit:
         train = np.flatnonzero(np.arange(n_lines) != index)
         return _reference_fit(drug_average(inputs.delta0, train))
     if spec.kind == "nearest_lines":
-        return nearest_lines_lolo(inputs.similarity, inputs.delta0, inputs.tested, index)
+        return nearest_lines_lolo(
+            inputs.similarity, inputs.delta0, inputs.tested, index, max_bytes=inputs.max_bytes
+        )
     family = inputs.components.get(spec.id)
     if family is not None:
-        return ridge_lolo_k(family, inputs.delta0, inputs.tested, index)
-    return ridge_lolo(_kernel(spec, inputs), inputs.delta0, inputs.tested, index)
+        return ridge_lolo_k(family, inputs.delta0, inputs.tested, index, max_bytes=inputs.max_bytes)
+    return ridge_lolo(
+        _kernel(spec, inputs), inputs.delta0, inputs.tested, index, max_bytes=inputs.max_bytes
+    )
 
 
 def _fit_lodo(spec: ModelSpec, index: int, inputs: RoundInputs) -> Fit:
@@ -366,11 +384,32 @@ def _fit_lodo(spec: ModelSpec, index: int, inputs: RoundInputs) -> Fit:
     n_lines = len(inputs.grid.lines)
     if spec.kind == "reference":
         no_line_term = np.zeros((n_lines, n_lines))
-        return ridge_lodo(no_line_term, inputs.tanimoto, inputs.delta0, inputs.tested, index)
+        return ridge_lodo(
+            no_line_term,
+            inputs.tanimoto,
+            inputs.delta0,
+            inputs.tested,
+            index,
+            max_bytes=inputs.max_bytes,
+        )
     family = inputs.components.get(spec.id)
     if family is not None:
-        return ridge_lodo_k(family, inputs.tanimoto, inputs.delta0, inputs.tested, index)
-    return ridge_lodo(_kernel(spec, inputs), inputs.tanimoto, inputs.delta0, inputs.tested, index)
+        return ridge_lodo_k(
+            family,
+            inputs.tanimoto,
+            inputs.delta0,
+            inputs.tested,
+            index,
+            max_bytes=inputs.max_bytes,
+        )
+    return ridge_lodo(
+        _kernel(spec, inputs),
+        inputs.tanimoto,
+        inputs.delta0,
+        inputs.tested,
+        index,
+        max_bytes=inputs.max_bytes,
+    )
 
 
 def _round_pairs(scheme: Scheme, index: int, inputs: RoundInputs) -> tuple[np.ndarray, np.ndarray]:
@@ -471,6 +510,15 @@ def main() -> None:
     ap.add_argument("--round", dest="round_index", type=int, required=True)
     ap.add_argument("--grid", type=Path, required=True)
     ap.add_argument("--cache", type=Path, required=True)
+    ap.add_argument(
+        "--max-bytes",
+        type=int,
+        default=MAX_BYTES,
+        help="working-block budget for the fits, in bytes (default: models.MAX_BYTES, 2 GiB). "
+        "The Alpine job passes the memory it asked Slurm for, less the answer arrays: at the "
+        "library default the leave-one-out tuning pass raises above roughly 81,800 genes "
+        "however much memory the job actually holds",
+    )
     args = ap.parse_args()
 
     scheme = cast(Scheme, args.scheme)
@@ -486,7 +534,7 @@ def main() -> None:
         print(f"{scores_path} and {settings_path} already done, skipping")
         return
 
-    inputs = load_inputs(grid, args.cache)
+    inputs = load_inputs(grid, args.cache, max_bytes=int(args.max_bytes))
     scores, settings = run_round(scheme, index, inputs)
     write_round(args.cache, scheme, index, scores, settings, realized_component_ks(inputs))
     print(f"wrote {scores_path} ({len(scores)} rows)")

@@ -106,10 +106,10 @@ ALL_SBATCH = {**DATA_SBATCH, **FIT_SBATCH}
 
 #: What one fit task and the combine must hold, from task 10's measurements. A round loads the
 #: answers (delta float32 ~0.96 GB, delta0 another ~0.96 GB, tested ~0.24 GB: about 2.2 GB) and
-#: fits inside ``models.MAX_BYTES`` (2 GiB) of working blocks, so about 4.3 GiB is the floor and
-#: task 11B's brief sizes a task at 8 GB or more. The combine holds the fit control's
-#: 50 x 107 x 300 grid several times over plus the same 2 GiB of ridge working arrays; task 10b
-#: measured it at 8 GB.
+#: sizes its working blocks by ``rung1_fit.sbatch``'s own ``FIT_MAX_BYTES``, derived from that
+#: job's ``--mem`` rather than from ``models.MAX_BYTES`` (see the test below); task 11B's brief
+#: sizes a task at 8 GB or more. The combine holds the fit control's 50 x 107 x 300 grid several
+#: times over plus 2 GiB of ridge working arrays; task 10b measured it at 8 GB.
 FIT_MIN_MEM_MB = 8 * 1024
 
 # Alpine bills memory per core at 3,840 MB/core (PROCESS §2). Slurm's --mem takes a size suffix
@@ -263,6 +263,39 @@ def test_mem_to_mb_parses_the_gib_suffix_correctly() -> None:
     assert _mem_to_mb("61G") > budget_mb
     assert _mem_to_mb("60G") <= budget_mb
     assert _mem_to_mb("61440M") == budget_mb
+
+
+def test_the_fit_job_passes_its_memory_budget_to_the_fitter() -> None:
+    """A round's working-block budget must come from what THIS job asked for.
+
+    ``scripts/heldout_fit.py`` passed nothing, so every fit ran at ``models.MAX_BYTES`` (2 GiB)
+    however much memory the job held: ``ridge_lolo_k``'s tuning pass needs
+    ``(5 x 13 + 2) x 49 x G x 8`` bytes per drug and raises above roughly 81,800 genes, which
+    would kill all 157 array tasks at once and be fixable only by editing a constant and
+    redeploying. The budget is derived here from the job's own ``--mem``, and the two numbers it
+    is derived from are checked against that directive.
+    """
+    text = _read("rung1_fit.sbatch")
+    mem_g = _mem_to_mb(_sbatch_directive(text, "mem")) // 1024
+    declared = {
+        key: int(value)
+        for key, value in re.findall(r"^(FIT_MEM_G|FIT_ANSWERS_G)=(\d+)", text, re.MULTILINE)
+    }
+    assert declared.get("FIT_MEM_G") == mem_g, (
+        f"FIT_MEM_G={declared.get('FIT_MEM_G')} must be this job's own --mem of {mem_g}G"
+    )
+    assert 0 < declared.get("FIT_ANSWERS_G", 0) < mem_g, (
+        "the budget must leave the answer arrays room and still be positive"
+    )
+    assert re.search(
+        r"FIT_MAX_BYTES=\$\(\(\s*\(FIT_MEM_G - FIT_ANSWERS_G\) \* 1024 \* 1024 \* 1024\s*\)\)",
+        text,
+    ), "FIT_MAX_BYTES must be derived from the two declared numbers, not written out"
+    assert "scripts/heldout_fit.py" in _script_calls(text)
+    assert re.search(r'--max-bytes\s+"\$FIT_MAX_BYTES"', text), (
+        "heldout_fit.py must be GIVEN the budget; without the flag the fit silently uses "
+        "models.MAX_BYTES and the job's --mem buys it nothing"
+    )
 
 
 @pytest.mark.parametrize("name", sorted(n for n, spec in ALL_SBATCH.items() if "array" in spec))

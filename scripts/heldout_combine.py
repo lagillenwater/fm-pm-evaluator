@@ -305,6 +305,20 @@ WEIGHTS_CHECK_KEYS: tuple[str, ...] = (
 )
 
 
+def read_written_table(path: Path) -> pd.DataFrame:
+    """Read a table an earlier stage wrote, so every value read back is the value it wrote.
+
+    ``keep_default_na=False`` keeps the cell line whose DepMap identifier is the literal string
+    ``NA`` -- one of the design's 50 lines (section 2) -- from being read as a missing value.
+    Under pandas' defaults it becomes NaN and reaches ``01_build.png``'s panel (a) and every
+    identity grid labelled "nan": a real value read as an absence, in a published figure.
+    ``float_precision="round_trip"`` keeps the default CSV float parser from shifting the last
+    bit of a double (measured in task 10b). This is the reader ``scripts/verify_rung1.py`` has
+    used from the start, for the same two reasons.
+    """
+    return pd.read_csv(path, keep_default_na=False, na_values=[""], float_precision="round_trip")
+
+
 def _load_script(name: str, path: Path) -> ModuleType:
     """Import a sibling ``scripts/`` module by path, reusing one already imported.
 
@@ -904,17 +918,17 @@ def read_build_tables(
             f"(run the descriptions and embed stages): {', '.join(missing[:5])}"
         )
     matches = pd.concat(
-        [pd.read_csv(files["identity_match"])]
-        + [pd.read_csv(files[f"identity_match_stack_{v}"]) for v in STACK_VERSIONS],
+        [read_written_table(files["identity_match"])]
+        + [read_written_table(files[f"identity_match_stack_{v}"]) for v in STACK_VERSIONS],
         ignore_index=True,
     )
     grids = {
-        description: pd.read_csv(files[f"identity_grid_{description}"])
+        description: read_written_table(files[f"identity_grid_{description}"])
         for description in ("expression", "pca", "nmf")
     }
     for version in STACK_VERSIONS:
-        grids[f"stack_{version}"] = pd.read_csv(files[f"identity_grid_stack_{version}"])
-    cells = pd.read_csv(files["cells"])
+        grids[f"stack_{version}"] = read_written_table(files[f"identity_grid_stack_{version}"])
+    cells = read_written_table(files["cells"])
     weights = cast(dict[str, Any], json.loads(files["weights_check"].read_text()))
     absent = [key for key in WEIGHTS_CHECK_KEYS if key not in weights]
     if absent:

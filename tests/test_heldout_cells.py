@@ -18,6 +18,7 @@ import importlib.util
 import math
 import pickle
 import sys
+import warnings
 from pathlib import Path
 from typing import cast
 
@@ -596,6 +597,106 @@ def test_dmso_cells_end_to_end(tmp_path: Path) -> None:
     # ---- registration refuses a second time ----
     with pytest.raises(SystemExit, match="exists"):
         hc.register_tranche(GRID, cache / "cells", tranche_dir)
+
+
+@pytest.mark.step_build
+def test_descriptions_read_only_dmso_cells(tmp_path: Path) -> None:
+    """Invariant 3 (plan.md): a line's description carries no drug response.
+
+    The filter is structural -- ``scan_shard`` keeps ``drug == DMSO_TF`` alone -- and this
+    asserts its effect on the numbers a model is actually handed. The fixture shards carry a
+    TREATED L1 cell with an extreme profile (99 counts of GA) and a DMSO cell of a line outside
+    the grid; the line's expression must be the pseudobulk of its five DMSO cells and nothing
+    else, and the final assertion shows the treated cell would have moved it.
+    """
+    shard0, shard1 = _fixture_shards(tmp_path)
+    grid_cellosaurus = {"CVCL_L1", "CVCL_L2"}
+    with shard0.open("rb") as fh:
+        meta0, counts0, all0 = hc.scan_shard(
+            fh, 0, grid_cellosaurus, TOKEN_TO_COL, len(PANEL_SYMS), seed=0, fraction=1.0
+        )
+    with shard1.open("rb") as fh:
+        meta1, counts1, all1 = hc.scan_shard(
+            fh, 1, grid_cellosaurus, TOKEN_TO_COL, len(PANEL_SYMS), seed=0, fraction=1.0
+        )
+
+    cache = tmp_path / "cache"
+    hc.write_block_outputs(
+        cache / "dmso_0.parquet",
+        cache / "dmso_0.npz",
+        cache / "dmso_0_all.parquet",
+        [meta0, meta1],
+        [counts0, counts1],
+        [all0, all1],
+        len(PANEL_SYMS),
+    )
+    hc.combine(
+        GRID,
+        CROSSWALK,
+        PANEL_SYMS,
+        cache,
+        tmp_path / "out",
+        tmp_path / "tranches",
+        n_blocks=1,
+        per_line=10,
+    )
+
+    expression = pd.read_parquet(cache / "expression.parquet")
+    assert sorted(expression.index.tolist()) == ["L1", "L2"], "a non-grid line was described"
+
+    def log2_cpm(rows: np.ndarray) -> np.ndarray:
+        total = rows.sum(axis=0, dtype=np.float64)
+        return np.log2(total / total.sum() * 1_000_000.0 + 1.0)
+
+    dmso_l1 = np.array(
+        [
+            cast(np.ndarray, record["vec"])
+            for record in _expected_dmso_cells()
+            if record["cellosaurus"] == "CVCL_L1"
+        ]
+    )
+    treated_l1 = np.zeros(len(PANEL_SYMS), dtype=np.float32)
+    treated_l1[TOKEN_TO_COL[101]] = 99.0
+
+    described = expression.loc["L1"].to_numpy(dtype=np.float64)
+    np.testing.assert_allclose(described, log2_cpm(dmso_l1), rtol=1e-12)
+    assert not np.allclose(described, log2_cpm(np.vstack([dmso_l1, treated_l1]))), (
+        "the treated cell moves this line's description by nothing, so the assertion above "
+        "could not have detected it being read"
+    )
+
+
+@pytest.mark.step_build
+def test_write_line_h5ad_warns_about_nothing(tmp_path: Path) -> None:
+    """Binding constraint (global-constraints.md): test output must be pristine, anndata's
+    ``ImplicitModificationWarning`` included.
+
+    It fires when an AnnData is handed a frame whose index is not strings -- anndata converts
+    the index and says so. Building ``obs`` and ``var`` with string indexes BEFORE the object
+    exists is the fix; repairing them afterwards leaves the warning already emitted.
+    """
+    import anndata as ad
+
+    obs = pd.DataFrame(
+        {
+            "cellosaurus": ["CVCL_L1", "CVCL_L1"],
+            "line": ["L1", "L1"],
+            "plate": ["P1", "P2"],
+            "key": ["0" * 16, "1" * 16],
+            "half": np.array([0, 1], dtype=np.int8),
+        }
+    )
+    counts = sparse.csr_matrix(np.ones((2, len(PANEL_SYMS)), dtype=np.float32))
+
+    path = tmp_path / "line_0.h5ad"
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", ad.ImplicitModificationWarning)
+        hc.write_line_h5ad(path, counts, obs, PANEL_SYMS)
+
+    written = ad.read_h5ad(path)
+    assert list(written.var_names) == PANEL_SYMS
+    assert list(written.var["feature_name"]) == PANEL_SYMS
+    assert list(written.obs["plate"]) == ["P1", "P2"]
 
 
 @pytest.mark.step_build

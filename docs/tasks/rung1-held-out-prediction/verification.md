@@ -41,8 +41,11 @@ run to. Job ids, nodes, wall times and peak memory are filled in from
 
 Every CPU job's memory is a whole number of Alpine cores at 3,840 MB each (PROCESS §2), and the
 three fit-stage jobs are sized from task 10's measurements: a round holds about 2.2 GB of answer
-arrays plus `models.MAX_BYTES` (2 GiB) of working blocks, and the combine was measured at 8 GB
-and about an hour, CPU only.
+arrays, and its working blocks are sized by `rung1_fit.sbatch`'s own `FIT_MAX_BYTES` — the job's
+15G less the 5G the arrays and the interpreter hold, passed to `scripts/heldout_fit.py` as
+`--max-bytes` — rather than by `models.MAX_BYTES` (2 GiB), which the fits would otherwise use
+however much memory the job had asked for. The combine was measured at 8 GB and about an hour,
+CPU only.
 
 **What the chain enforces, and what the operator must sequence.** Within each stage every
 dependency in the table above is a real `--dependency=afterok`, submitted by

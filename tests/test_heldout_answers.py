@@ -261,7 +261,12 @@ def test_answer_slices_equal_one_pass(tmp_path: Path) -> None:
     ]
     combined = _sorted_by_key(pd.concat(slices, ignore_index=True))
 
-    pd.testing.assert_frame_equal(combined[list(one_pass.columns)], one_pass, check_dtype=False)
+    # check_exact: PROCESS section 2 requires the slice-versus-one-pass comparison to be exact.
+    # assert_frame_equal's default rtol of 1e-5 would pass a slicing scheme that shifted a pair's
+    # mean by 1e-6, and this is the test that certifies the 8-way answers scan.
+    pd.testing.assert_frame_equal(
+        combined[list(one_pass.columns)], one_pass, check_dtype=False, check_exact=True
+    )
 
 
 @pytest.mark.step_build

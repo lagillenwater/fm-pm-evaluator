@@ -8,11 +8,12 @@
 #SBATCH --mem=15G                    # 4 cores x 3,840 MB = 15,360 MB = 15G exactly (Slurm's G
                                      # is GiB). A round holds the answers -- delta float32
                                      # ~0.96 GB, delta0 another ~0.96 GB, tested ~0.24 GB, about
-                                     # 2.2 GB in all (task 10a) -- and fits inside
-                                     # models.MAX_BYTES (2 GiB) of working blocks, so its floor
-                                     # is ~4.3 GiB. Task 11B's brief sizes a task at 8 GB or
-                                     # more; that needs 3 cores (11,520 MB), and 4 is the first
-                                     # whole-core request landing on an exact GiB figure.
+                                     # 2.2 GB in all (task 10a) -- and its working blocks are
+                                     # sized by FIT_MAX_BYTES below, which is derived from THIS
+                                     # figure rather than from models.MAX_BYTES. Task 11B's
+                                     # brief sizes a task at 8 GB or more; that needs 3 cores
+                                     # (11,520 MB), and 4 is the first whole-core request
+                                     # landing on an exact GiB figure.
 #SBATCH --time=02:00:00              # 14 (leave one line out) or 13 (leave one drug out) models
                                      # per round; task 10a measured the ridge fits at 6-23 s
                                      # each at full size, so the compute is minutes. The rest is
@@ -57,11 +58,24 @@ DISPATCH="$(round_for_index "${SLURM_ARRAY_TASK_ID:?rung1_fit.sbatch needs SLURM
 SCHEME="${DISPATCH%% *}"
 ROUND="${DISPATCH##* }"
 
+# The working-block budget for this round's fits, in bytes, passed to heldout_fit.py so a round
+# uses the memory THIS job holds instead of models.MAX_BYTES (2 GiB) whatever --mem says. It is
+# not a safety margin but a hard limit: ridge_lolo_k's tuning pass needs (5 x 13 + 2) x 49 x G x
+# 8 bytes per drug and RAISES rather than spilling, so at the library default a wide enough gene
+# panel fails all 157 array tasks at once and is fixable only by editing a constant and
+# redeploying. FIT_MEM_G must equal the --mem directive above; FIT_ANSWERS_G is what the budget
+# must leave free -- the answer arrays (~2.2 GB, task 10a) plus interpreter, pandas and pyarrow
+# overhead, rounded up. tests/test_rung1_jobs.py cross-checks both against --mem.
+FIT_MEM_G=15
+FIT_ANSWERS_G=5
+FIT_MAX_BYTES=$(( (FIT_MEM_G - FIT_ANSWERS_G) * 1024 * 1024 * 1024 ))
+
 COMMIT="$(git -C "$REPO" rev-parse --short HEAD)"
-echo "Resolved: commit=$COMMIT job=${SLURM_ARRAY_JOB_ID:-$SLURM_JOB_ID} task=${SLURM_ARRAY_TASK_ID:-} scheme=$SCHEME round=$ROUND cache=$RUNG1_CACHE"
+echo "Resolved: commit=$COMMIT job=${SLURM_ARRAY_JOB_ID:-$SLURM_JOB_ID} task=${SLURM_ARRAY_TASK_ID:-} scheme=$SCHEME round=$ROUND cache=$RUNG1_CACHE max_bytes=$FIT_MAX_BYTES"
 
 python scripts/heldout_fit.py \
     --scheme "$SCHEME" \
     --round "$ROUND" \
     --grid "$OUT_DIR/rung1_grid.json" \
-    --cache "$RUNG1_CACHE"
+    --cache "$RUNG1_CACHE" \
+    --max-bytes "$FIT_MAX_BYTES"

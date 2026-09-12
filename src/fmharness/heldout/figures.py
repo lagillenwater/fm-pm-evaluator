@@ -285,8 +285,14 @@ def fig_build(
         ax_match.set_ylim(0.0, 1.05)
     else:
         _note_empty(ax_match, "no identity-match table")
-    identical = bool(weights_check.get("identical_all", False))
-    n_different = weights_check.get("n_different", "?")
+    # Indexed, never defaulted -- the same defect the combine's build control was fixed for,
+    # left behind in the figure that draws the claim. Through ``.get`` an empty or renamed
+    # ``rung1_weights_check.json`` prints "encoder differs from the base: True (? tensors
+    # differ)": H2's premise, manufactured from a file nothing read. ``read_build_tables`` has
+    # already refused a file missing either key, and a KeyError here is still louder than a
+    # reassuring sentence under a published panel.
+    identical = bool(weights_check["identical_all"])
+    n_different = weights_check["n_different"]
     ax_match.set_xlabel("line description")
     ax_match.set_ylabel("share of lines matching their own other half")
     ax_match.set_title(
