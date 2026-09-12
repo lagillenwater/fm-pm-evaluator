@@ -629,6 +629,7 @@ def fig_score(
         if not models:
             _note_empty(ax, f"no models scored under {scheme}")
         width = 0.38
+        headroom: list[float] = []
         for offset, gene_set in zip((-0.19, 0.19), ("responding", "all"), strict=True):
             chosen = rows.loc[_labels(rows, "gene_set") == gene_set]
             if not len(chosen):
@@ -646,23 +647,30 @@ def fig_score(
                 label=f"{gene_set} genes",
             )
             ax.errorbar(x, mean_r, yerr=yerr, fmt="none", ecolor="k", capsize=3, lw=1.0)
+            # The reference lines stay legend entries -- naming them on the lines themselves put
+            # the text over the bars, since two of the four sit BELOW the bar tops. The legend is
+            # kept clear of them by the headroom set after this loop instead.
+            headroom.extend(_numeric(chosen, "ci_hi").tolist())
             sqrt_sb, rung0_r = ceiling_by_set.get(gene_set, (np.nan, np.nan))
-            if np.isfinite(sqrt_sb):
+            for value, style, line_width, text in (
+                (sqrt_sb, "--", 1.4, f"{gene_set}: ceiling sqrt(SB) = {sqrt_sb:.4f}"),
+                (rung0_r, ":", 1.0, f"{gene_set}: rung 0 split-half r = {rung0_r:.4f}"),
+            ):
+                if not np.isfinite(value):
+                    continue
                 ax.axhline(
-                    sqrt_sb,
+                    value,
                     color=_GENE_SET_COLOR[gene_set],
-                    lw=1.4,
-                    linestyle="--",
-                    label=f"{gene_set}: ceiling sqrt(SB) = {sqrt_sb:.4f}",
+                    lw=line_width,
+                    linestyle=style,
+                    label=text,
                 )
-            if np.isfinite(rung0_r):
-                ax.axhline(
-                    rung0_r,
-                    color=_GENE_SET_COLOR[gene_set],
-                    lw=1.0,
-                    linestyle=":",
-                    label=f"{gene_set}: rung 0 split-half r = {rung0_r:.4f}",
-                )
+                headroom.append(float(value))
+        # Room above everything drawn, so the legend has empty axes to sit in rather than
+        # covering the ceiling lines it names.
+        drawn_values = [value for value in headroom if np.isfinite(value)]
+        if drawn_values:
+            ax.set_ylim(top=max(drawn_values) * 1.45)
         ax.set_xticks(np.arange(len(models)))
         ax.set_xticklabels(models, rotation=90, fontsize=6)
         ax.axhline(0.0, color="k", lw=0.8)
@@ -720,6 +728,31 @@ def fig_score(
 # --------------------------------------------------------------------------------------------
 # null -- what a comparison is read against
 # --------------------------------------------------------------------------------------------
+
+
+#: The hypotheses whose redraw distributions the null figure draws, one panel each (design §8).
+_NULL_PANEL_HYPOTHESES: tuple[str, ...] = ("H1(a)", "H2")
+
+
+def null_panel_comparisons(comparisons: pd.DataFrame) -> list[str]:
+    """One comparison per hypothesis in ``_NULL_PANEL_HYPOTHESES``, chosen SEPARATELY.
+
+    Design section 8 asks for "redraws for H1(a) and H2". Taking the first two responding-gene
+    comparisons overall does not do that: H1(a) names one comparison under each scheme (Stack
+    base against the drug average when a line is hidden, against chemistry only when a drug is
+    hidden), so both panels filled with H1(a) and H2 -- one of the rung's two hypotheses -- never
+    got a panel at all. Each hypothesis now takes its own first match.
+    """
+    hypotheses = _labels(comparisons, "hypothesis")
+    responding = _labels(comparisons, "gene_set") == "responding"
+    names = _labels(comparisons, "comparison")
+    drawn: list[str] = []
+    for wanted in _NULL_PANEL_HYPOTHESES:
+        for name in _ordered_unique(names[(hypotheses == wanted) & responding]):
+            if name not in drawn:
+                drawn.append(name)
+                break
+    return drawn
 
 
 def fig_null(comparisons: pd.DataFrame, redraws: pd.DataFrame, out: Path) -> Path:
@@ -785,19 +818,7 @@ def fig_null(comparisons: pd.DataFrame, redraws: pd.DataFrame, out: Path) -> Pat
     ax.set_title("(a) every comparison with its interval and MDE, both gene sets", fontsize=9)
     _legend(ax, fontsize=6)
 
-    hypotheses = _labels(comparisons, "hypothesis")
-    drawn: list[str] = []
-    for wanted in ("H1(a)", "H2"):
-        rows = cast(Any, comparisons).loc[
-            (hypotheses == wanted) & (_labels(comparisons, "gene_set") == "responding")
-        ]
-        for name in _ordered_unique(_labels(rows, "comparison")):
-            if name not in drawn:
-                drawn.append(name)
-            if len(drawn) >= 2:
-                break
-        if len(drawn) >= 2:
-            break
+    drawn = null_panel_comparisons(comparisons)
 
     for position, name in enumerate(drawn[:2]):
         ax_draws = fig.add_subplot(grid[position, 1])

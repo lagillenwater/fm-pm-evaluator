@@ -48,6 +48,7 @@ from __future__ import annotations
 import importlib.util
 import itertools
 import json
+import re
 import shutil
 import sys
 from dataclasses import replace
@@ -77,6 +78,7 @@ from fmharness.heldout.descriptions import (
     random_stand_in,
     standardize,
 )
+from fmharness.heldout.figures import null_panel_comparisons
 from fmharness.heldout.grid import (
     SCIPLEX_CIDS,
     SCIPLEX_LINE,
@@ -1332,7 +1334,10 @@ def test_the_params_sidecar_pins_inputs_seeds_and_component_counts(
     input file -- each checked here against the file on disk."""
     out, cache = run_dirs["out_staged"], run_dirs["staged"]
     params = json.loads((out / hc.PARAMS_JSON).read_text())
-    assert params["git_sha"]
+    # A full commit hash, not merely something truthy: the producing commit is one of the three
+    # things project rule 1 says cannot be recovered afterwards, and a sidecar recording
+    # "unknown" would pass a truthiness check while naming no commit at all.
+    assert re.fullmatch(r"[0-9a-f]{40}", str(params["git_sha"])), params["git_sha"]
     assert params["args"]["cache"] == str(cache)
     assert params["seeds"]["redraw_base_seed"] == hr.REDRAW_BASE_SEED == 7000
     assert params["seeds"]["random_stand_ins"] == dict(RANDOM_SEEDS)
@@ -1406,6 +1411,51 @@ def test_a_contrast_between_two_identical_fits_is_refused() -> None:
     np.testing.assert_allclose(
         hc.paired_differences(moved, "a", "b", "lolo_a_vs_b"), [0.0, 0.0, -0.1]
     )
+
+
+@pytest.mark.step_null
+def test_the_null_figure_draws_one_panel_per_hypothesis(run_dirs: dict[str, Path]) -> None:
+    """Design section 8 asks the null figure for "redraws for H1(a) and H2", one panel each.
+
+    The trap this pins: H1(a) names a comparison under BOTH schemes -- Stack base against the
+    drug average when a line is hidden, against chemistry only when a drug is hidden -- so a
+    selection that takes "the first two responding-gene comparisons" fills both panels with
+    H1(a) and never reaches H2, one of the rung's two hypotheses. The panels are chosen per
+    hypothesis instead, and the titles the figure draws are these names.
+    """
+    assert sum(1 for comparison in COMPARISONS if comparison.hypothesis == "H1(a)") == 2
+
+    table = pd.read_csv(run_dirs["out_staged"] / "rung1_comparisons.csv")
+    drawn = null_panel_comparisons(table)
+    assert len(drawn) == 2, drawn
+    hypotheses = [
+        str(table.loc[table["comparison"] == name, "hypothesis"].to_numpy()[0]) for name in drawn
+    ]
+    assert hypotheses == ["H1(a)", "H2"], dict(zip(drawn, hypotheses, strict=True))
+
+
+@pytest.mark.step_build
+def test_a_weights_check_missing_a_key_is_refused(
+    run_dirs: dict[str, Path], tmp_path: Path
+) -> None:
+    """The build control's weights row is H2's premise -- that the drug fine-tune is a different
+    model from the base checkpoint. Read with ``dict.get`` defaults, an empty or renamed
+    ``rung1_weights_check.json`` would publish "encoders differ, 0 tensors differ": that claim
+    manufactured from silence. Every key is required instead."""
+    out_dir = tmp_path / "out"
+    shutil.copytree(run_dirs["out_staged"], out_dir)
+    complete = json.loads((out_dir / "rung1_weights_check.json").read_text())
+    assert all(key in complete for key in hc.WEIGHTS_CHECK_KEYS)
+
+    for missing in hc.WEIGHTS_CHECK_KEYS:
+        partial = {key: value for key, value in complete.items() if key != missing}
+        (out_dir / "rung1_weights_check.json").write_text(json.dumps(partial) + "\n")
+        with pytest.raises(SystemExit, match=missing):
+            hc.read_build_tables(out_dir)
+
+    (out_dir / "rung1_weights_check.json").write_text(json.dumps({}) + "\n")
+    with pytest.raises(SystemExit, match="weights"):
+        hc.read_build_tables(out_dir)
 
 
 @pytest.mark.step_score

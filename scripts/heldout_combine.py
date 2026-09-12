@@ -65,8 +65,7 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
 
 from fmharness.heldout import COMPARISONS, Scheme  # noqa: E402
-from fmharness.heldout.answers import Answers, scoreable  # noqa: E402
-from fmharness.heldout.chemistry import tanimoto  # noqa: E402
+from fmharness.heldout.answers import scoreable  # noqa: E402
 from fmharness.heldout.comparisons import (  # noqa: E402
     N_BLOCKS,
     N_DRAWS,
@@ -74,28 +73,45 @@ from fmharness.heldout.comparisons import (  # noqa: E402
     design_effect,
     holm,
     mean_score_ci,
-    redraw_estimates,
     summarize_redraws,
     width_ratio,
 )
+
+# The controls' machinery and every number it uses come from fmharness.heldout.controls, which
+# tests/test_rung1_controls.py asserts on and this step publishes (ruling 38). Both callers run
+# THE SAME code: a second copy that merely agreed today would let the published evidence table
+# keep the old behaviour the next time the test harness changed, with nothing failing.
 from fmharness.heldout.controls import (  # noqa: E402
-    leaky_lodo_prediction,
-    leaky_lolo_prediction,
-    lodo_signal_variance,
-    lolo_signal_variance,
-    noise_for_reliability,
+    ALPHA,
+    DETECTION_RATE,
+    FIT_GRID,
+    FIT_NULL_GRID_SEED,
+    FIT_NULL_STAND_IN_SEED,
+    FIT_SEEDS,
+    NULL_UNIT_SEED,
+    R_ALL,
+    R_RESPONDING,
+    REDRAW_SEED,
+    REPETITIONS,
+    SCORE_GRID,
+    SCORE_POOL_SEED,
+    SCORE_RESPONDING_SEED,
+    SCORE_UNRELATED_SEEDS,
+    SE_MULTIPLE,
+    SPLIT_AMPLITUDE,
+    SPLIT_GRID,
+    SPLIT_SEEDS,
+    STRENGTH,
+    contrast_summary,
+    fit_control,
+    fit_null_control,
+    grid_scores,
+    null_repetition_pvalues,
     planted_reliability_pool,
-    planted_signature_grid,
+    split_control_run,
     synthetic_answers,
-    synthetic_lodo_grid,
-    synthetic_lolo_grid,
 )
-from fmharness.heldout.descriptions import (  # noqa: E402
-    NMF_SEED,
-    RANDOM_SEEDS,
-    linear_kernel,
-    random_stand_in,
-)
+from fmharness.heldout.descriptions import NMF_SEED, RANDOM_SEEDS  # noqa: E402
 from fmharness.heldout.figures import (  # noqa: E402
     fig_build,
     fig_fit,
@@ -105,14 +121,6 @@ from fmharness.heldout.figures import (  # noqa: E402
 )
 from fmharness.heldout.grid import Grid, load_drug_metadata, load_grid  # noqa: E402
 from fmharness.heldout.leakage import leakage_profiles, leakage_records  # noqa: E402
-from fmharness.heldout.models import (  # noqa: E402
-    LAMBDAS,
-    drug_average,
-    nearest_lines_lolo,
-    ridge_lodo,
-    ridge_lolo,
-    similarity_from_description,
-)
 from fmharness.heldout.records import is_done, sha256_file, write_record  # noqa: E402
 from fmharness.heldout.scoring import GENE_SETS, fraction_of_ceiling, score_pairs  # noqa: E402
 
@@ -286,47 +294,15 @@ PARAMS_JSON = "rung1_run.params.json"
 #: 5,000 floats exact with ``float_precision="round_trip"``, 3,445 of 5,000 without). Task 12's
 #: battery must read this table, and ``rung1_settings.csv``, with ``float_precision="round_trip"``.
 
-# ----------------------------------------------------------------------------------------------
-# The controls' fixed parameters. These are the numbers tests/test_rung1_controls.py asserts on
-# (rulings 26, 27 and 28, and the recorded departure of 2026-09-11 in decisions.md), declared
-# here so the tables this step writes are the evidence behind those assertions, not a second
-# control with different settings.
-
-#: The design's full-data reliabilities (section 6): responding genes, all genes.
-R_RESPONDING = 0.7353
-R_ALL = 0.1503
-
-#: The fit control's planted strength, and the grid it is planted on: the screen's own size.
-CONTROL_STRENGTH = 0.3
-FIT_GRID = {"n_lines": 50, "n_drugs": 107, "n_genes": 300, "width": 20}
-FIT_SEEDS: dict[str, int] = {"lolo": 71, "lodo": 72}
-FIT_NULL_GRID_SEED = 73
-FIT_NULL_STAND_IN_SEED = 74
-
-#: The split control's grid. Deliberately small: the leaky fit is a dense solve over every
-#: (line, drug) pair, so the broken split cannot be run at the screen's size (task 9's note).
-SPLIT_GRID = {"n_lines": 20, "n_drugs": 24, "n_genes": 200, "width": 8}
-SPLIT_AMPLITUDE = 1.0
-SPLIT_SEEDS: dict[str, tuple[int, int]] = {"lolo": (81, 82), "lodo": (83, 84)}
-
-#: The score control's pool, and the seeds of its two tests.
-SCORE_GRID = {"n_lines": 20, "n_drugs": 30, "n_genes": 2000}
-SCORE_POOL_SEED, SCORE_RESPONDING_SEED = 41, 42
-SCORE_UNRELATED_SEEDS = (43, 44, 45)
-
-#: The null control's repetitions and level, and the rates they are read against (invariant 9).
-CONTROL_REPETITIONS = 200
-CONTROL_ALPHA = 0.05
-NULL_DETECTION_RATE = 0.80
-NULL_UNIT_SEED = 61
-NULL_UNITS = 50
-
-#: The redraw seed every control contrast uses.
-CONTROL_REDRAW_SEED = 20260911
-
-#: Monte Carlo tolerance for the score control: a recovered mean passes within this many standard
-#: errors of the planted value, the error taken from the synthetic draw itself (invariant 9).
-CONTROL_SE_MULTIPLE = 3.0
+#: The keys ``rung1_weights_check.json`` must carry. The build control's weights row is H2's
+#: premise -- that the drug fine-tune is a different model from the base checkpoint -- so an
+#: absent key is refused rather than defaulted into a published claim.
+WEIGHTS_CHECK_KEYS: tuple[str, ...] = (
+    "n_shared",
+    "n_identical",
+    "n_different",
+    "identical_all",
+)
 
 
 def _load_script(name: str, path: Path) -> ModuleType:
@@ -416,9 +392,15 @@ def gather_settings(cache: Path, grid: Grid) -> tuple[pd.DataFrame, dict[str, li
             frames.append(table)
 
             record = json.loads(Path(f"{path}.done.json").read_text())
+            if "component_ks" not in record:
+                raise ValueError(
+                    f"{path}.done.json records no component_ks; the chosen k in the settings "
+                    "table means nothing without the candidate set it was chosen from, and a "
+                    "sidecar defaulting to {} would satisfy ruling 36 vacuously"
+                )
             realized = {
                 str(model): [int(k) for k in ks]
-                for model, ks in dict(record.get("component_ks", {})).items()
+                for model, ks in dict(record["component_ks"]).items()
             }
             if seen_from is None:
                 component_ks, seen_from = realized, f"{scheme} round {index}"
@@ -678,26 +660,6 @@ def comparison_table(
 # The controls of design section 8, at the design's own sizes, seeds and ceiling values
 
 
-def _grid_scores(prediction: np.ndarray, answers: Answers) -> np.ndarray:
-    """Every pair's score through the real ``score_pairs``, as an ``[L, D]`` array."""
-    n_lines, n_drugs, n_genes = prediction.shape
-    lines, drugs = np.divmod(np.arange(n_lines * n_drugs), n_drugs)
-    frame = score_pairs(
-        prediction.reshape(-1, n_genes), lines, drugs, answers, scoreable(answers, ())
-    )
-    scores = frame.loc[frame["gene_set"] == "responding", "r"].to_numpy(dtype=np.float64)
-    return scores.reshape(n_lines, n_drugs)
-
-
-def _contrast_summary(scores_a: np.ndarray, scores_b: np.ndarray, scheme: str) -> RedrawSummary:
-    """Mean over pairs of ``scores_a - scores_b``, redrawn over the scheme's held-out unit."""
-    diffs = scores_a - scores_b
-    lines, drugs = np.indices(diffs.shape)
-    units, n_units = (lines, diffs.shape[0]) if scheme == "lolo" else (drugs, diffs.shape[1])
-    draws = redraw_estimates(diffs.ravel(), units.ravel(), n_units, N_DRAWS, CONTROL_REDRAW_SEED)
-    return summarize_redraws(float(diffs.mean()), draws)
-
-
 def _control_row(
     scheme: str, planted: bool, contrast: str, summary: RedrawSummary
 ) -> dict[str, object]:
@@ -718,49 +680,9 @@ def _control_row(
         "n_drugs": FIT_GRID["n_drugs"],
         "n_genes": FIT_GRID["n_genes"],
         "width": FIT_GRID["width"],
-        "strength": CONTROL_STRENGTH if planted else 0.0,
+        "strength": STRENGTH if planted else 0.0,
         "reliability": R_RESPONDING,
     }
-
-
-def _lolo_rounds(
-    delta: np.ndarray, kernels: Mapping[str, np.ndarray], similarity: np.ndarray | None = None
-) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray]]:
-    """Every leave-one-line-out round: the drug average, ridge on each kernel, nearest lines."""
-    n_lines = delta.shape[0]
-    tested = np.ones(delta.shape, dtype=bool)
-    predictions = {name: np.empty(delta.shape) for name in (*kernels, "drug_average")}
-    lambdas = {name: np.empty(n_lines) for name in kernels}
-    if similarity is not None:
-        predictions["nearest_lines"] = np.empty(delta.shape)
-    for held in range(n_lines):
-        train = np.flatnonzero(np.arange(n_lines) != held)
-        predictions["drug_average"][held] = drug_average(delta, train)
-        for name, kernel in kernels.items():
-            fit = ridge_lolo(kernel, delta, tested, held)
-            predictions[name][held] = fit.prediction
-            lambdas[name][held] = float(fit.lam) if fit.lam is not None else np.nan
-        if similarity is not None:
-            predictions["nearest_lines"][held] = nearest_lines_lolo(
-                similarity, delta, tested, held
-            ).prediction
-    return predictions, lambdas
-
-
-def _lodo_rounds(
-    delta: np.ndarray, similarity: np.ndarray, kernels: Mapping[str, np.ndarray]
-) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray]]:
-    """Every leave-one-drug-out round of ridge on each line kernel."""
-    n_drugs = delta.shape[1]
-    tested = np.ones(delta.shape, dtype=bool)
-    predictions = {name: np.empty(delta.shape) for name in kernels}
-    lambdas = {name: np.empty(n_drugs) for name in kernels}
-    for held in range(n_drugs):
-        for name, kernel in kernels.items():
-            fit = ridge_lodo(kernel, similarity, delta, tested, held)
-            predictions[name][:, held] = fit.prediction
-            lambdas[name][held] = float(fit.lam) if fit.lam is not None else np.nan
-    return predictions, lambdas
 
 
 def control_fit() -> pd.DataFrame:
@@ -779,95 +701,25 @@ def control_fit() -> pd.DataFrame:
     """
     rows: list[dict[str, object]] = []
     for scheme in SCHEMES:
-        seed = FIT_SEEDS[scheme]
-        stand_in = linear_kernel(random_stand_in(FIT_GRID["n_lines"], FIT_GRID["width"], seed + 1))
-        if scheme == "lolo":
-            noise = noise_for_reliability(R_RESPONDING, lolo_signal_variance(CONTROL_STRENGTH))
-            grid = synthetic_lolo_grid(strength=CONTROL_STRENGTH, noise=noise, seed=seed)
-            kernels = {"description": linear_kernel(grid.description), "random": stand_in}
-            predictions, _ = _lolo_rounds(grid.delta, kernels)
-            reference = "drug_average"
-        else:
-            noise = noise_for_reliability(R_RESPONDING, lodo_signal_variance(CONTROL_STRENGTH))
-            grid = synthetic_lodo_grid(strength=CONTROL_STRENGTH, noise=noise, seed=seed)
-            if grid.fingerprints is None:
-                raise ValueError("the leave-one-drug-out control grid carries no fingerprints")
-            kernels = {
-                "chemistry_only": np.zeros((FIT_GRID["n_lines"], FIT_GRID["n_lines"])),
-                "description": linear_kernel(grid.description),
-                "random": stand_in,
-            }
-            predictions, _ = _lodo_rounds(grid.delta, tanimoto(grid.fingerprints), kernels)
-            reference = "chemistry_only"
-
-        answers = synthetic_answers(grid.delta)
-        scores = {name: _grid_scores(p, answers) for name, p in predictions.items()}
-        scores["oracle"] = _grid_scores(grid.truth, answers)
-        for name, left, right in (
-            ("oracle", "oracle", reference),
-            ("description", "description", reference),
-            ("description_minus_oracle", "description", "oracle"),
-            ("random", "random", reference),
-            ("description_minus_random", "description", "random"),
+        control = fit_control(scheme, FIT_SEEDS[scheme])
+        for name, summary in (
+            ("oracle", control.oracle),
+            ("description", control.description),
+            ("description_minus_oracle", control.description_minus_oracle),
+            ("random", control.random),
+            ("description_minus_random", control.description_minus_random),
         ):
-            rows.append(
-                _control_row(
-                    scheme, True, name, _contrast_summary(scores[left], scores[right], scheme)
-                )
-            )
+            rows.append(_control_row(scheme, True, name, summary))
 
-    rows.extend(_fit_null_rows())
-    return pd.DataFrame(rows, columns=list(FIT_CONTROL_COLUMNS))
-
-
-def _fit_null_rows() -> list[dict[str, object]]:
-    """The fit control's negative half: nothing planted, so nothing may be found.
-
-    Read one-sided (gain <= MDE, ruling 28): a model fitting noise loses a little, steadily, and a
-    two-sided check would test that loss rather than the split. With a drug hidden the chemistry
-    effect is set to zero as well, so every ridge faces pure line baselines and noise.
-    """
-    rows: list[dict[str, object]] = []
     for scheme in SCHEMES:
-        stand_in = linear_kernel(
-            random_stand_in(FIT_GRID["n_lines"], FIT_GRID["width"], FIT_NULL_STAND_IN_SEED)
-        )
-        if scheme == "lolo":
-            noise = noise_for_reliability(R_RESPONDING, lolo_signal_variance(0.0))
-            grid = synthetic_lolo_grid(strength=0.0, noise=noise, seed=FIT_NULL_GRID_SEED)
-            kernels = {"description": linear_kernel(grid.description), "random": stand_in}
-            predictions, lambdas = _lolo_rounds(
-                grid.delta, kernels, similarity_from_description(grid.description)
-            )
-            reference = "drug_average"
-        else:
-            noise = noise_for_reliability(R_RESPONDING, lodo_signal_variance(0.0, chemistry=0.0))
-            grid = synthetic_lodo_grid(
-                strength=0.0, chemistry=0.0, noise=noise, seed=FIT_NULL_GRID_SEED
-            )
-            if grid.fingerprints is None:
-                raise ValueError("the leave-one-drug-out null grid carries no fingerprints")
-            kernels = {
-                "chemistry_only": np.zeros((FIT_GRID["n_lines"], FIT_GRID["n_lines"])),
-                "description": linear_kernel(grid.description),
-                "random": stand_in,
-            }
-            predictions, lambdas = _lodo_rounds(grid.delta, tanimoto(grid.fingerprints), kernels)
-            reference = "chemistry_only"
-
-        answers = synthetic_answers(grid.delta)
-        scores = {name: _grid_scores(p, answers) for name, p in predictions.items()}
-        for name in scores:
-            if name == reference:
-                continue
-            row = _control_row(
-                scheme, False, name, _contrast_summary(scores[name], scores[reference], scheme)
-            )
-            chosen = lambdas.get(name)
-            if chosen is not None:
-                row["lambda_at_top_share"] = float(np.mean(chosen == LAMBDAS[-1]))
+        null = fit_null_control(scheme)
+        for name, summary in null.gains.items():
+            row = _control_row(scheme, False, name, summary)
+            share = null.lambda_at_top.get(name)
+            if share is not None:
+                row["lambda_at_top_share"] = share
             rows.append(row)
-    return rows
+    return pd.DataFrame(rows, columns=list(FIT_CONTROL_COLUMNS))
 
 
 def control_split() -> pd.DataFrame:
@@ -878,61 +730,12 @@ def control_split() -> pd.DataFrame:
     above its MDE -- while the shipped split scores it at zero within its MDE. Run on a small grid
     because the leaky fit is a dense solve over every (line, drug) pair (task 9's note).
     """
-    shape = (SPLIT_GRID["n_lines"], SPLIT_GRID["n_drugs"], SPLIT_GRID["n_genes"])
-    tested = np.ones(shape, dtype=bool)
     rows: list[dict[str, object]] = []
     for scheme in SCHEMES:
-        grid_seed, signature_seed = SPLIT_SEEDS[scheme]
-        shipped = np.empty(shape)
-        leaky = np.empty(shape)
-        if scheme == "lolo":
-            noise = noise_for_reliability(R_RESPONDING, lolo_signal_variance(CONTROL_STRENGTH))
-            grid = synthetic_lolo_grid(
-                *shape,
-                SPLIT_GRID["width"],
-                strength=CONTROL_STRENGTH,
-                noise=noise,
-                seed=grid_seed,
-            )
-            planted, signatures = planted_signature_grid(
-                grid.delta, "lolo", SPLIT_AMPLITUDE, seed=signature_seed
-            )
-            kernel = linear_kernel(grid.description)
-            for held in range(SPLIT_GRID["n_lines"]):
-                fit = ridge_lolo(kernel, planted, tested, held)
-                if fit.lam is None:
-                    raise ValueError("the shipped leave-one-line-out fit chose no penalty")
-                shipped[held] = fit.prediction
-                leaky[held] = leaky_lolo_prediction(kernel, planted, held, fit.lam)
-            signature_answer = np.broadcast_to(signatures[:, None, :], shape)
-        else:
-            noise = noise_for_reliability(R_RESPONDING, lodo_signal_variance(CONTROL_STRENGTH))
-            grid = synthetic_lodo_grid(
-                *shape,
-                SPLIT_GRID["width"],
-                strength=CONTROL_STRENGTH,
-                noise=noise,
-                seed=grid_seed,
-            )
-            if grid.fingerprints is None:
-                raise ValueError("the leave-one-drug-out split grid carries no fingerprints")
-            planted, signatures = planted_signature_grid(
-                grid.delta, "lodo", SPLIT_AMPLITUDE, seed=signature_seed
-            )
-            kernel = linear_kernel(grid.description)
-            similarity = tanimoto(grid.fingerprints)
-            for held in range(SPLIT_GRID["n_drugs"]):
-                fit = ridge_lodo(kernel, similarity, planted, tested, held)
-                if fit.lam is None:
-                    raise ValueError("the shipped leave-one-drug-out fit chose no penalty")
-                shipped[:, held] = fit.prediction
-                leaky[:, held] = leaky_lodo_prediction(kernel, similarity, planted, held, fit.lam)
-            signature_answer = np.broadcast_to(signatures[None, :, :], shape)
-
-        signature_answers = synthetic_answers(signature_answer)
-        for split, prediction in (("leaky", leaky), ("shipped", shipped)):
-            scores = _grid_scores(prediction, signature_answers)
-            summary = _contrast_summary(scores, np.zeros_like(scores), scheme)
+        run = split_control_run(scheme)
+        for split, prediction in (("leaky", run.leaky), ("shipped", run.shipped)):
+            scores = grid_scores(prediction, run.signature_answers)
+            summary = contrast_summary(scores, np.zeros_like(scores), scheme)
             rows.append(
                 {
                     "scheme": scheme,
@@ -947,9 +750,7 @@ def control_split() -> pd.DataFrame:
                     "p": summary["p"],
                     "sd": summary["sd"],
                     "mde": summary["mde"],
-                    "detected": bool(
-                        summary["estimate"] > summary["mde"] and summary["p"] < CONTROL_ALPHA
-                    ),
+                    "detected": bool(summary["estimate"] > summary["mde"] and summary["p"] < ALPHA),
                     "within_mde": bool(abs(summary["estimate"]) <= summary["mde"]),
                 }
             )
@@ -1016,19 +817,10 @@ def _score_control_rows(
                 "mean_r": mean,
                 "se": se,
                 "n_pairs": int(scores.size),
-                "within_3_se": bool(abs(mean - planted) <= CONTROL_SE_MULTIPLE * se),
+                "within_3_se": bool(abs(mean - planted) <= SE_MULTIPLE * se),
             }
         )
     return rows
-
-
-def _unit_structured_diffs(rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray]:
-    """Per-pair differences for one comparison with nothing planted: 50 lines holding 98-107
-    pairs each, a line effect of SD 0.02 shared by the line's pairs, and pair noise of SD 0.05."""
-    counts = 107 - rng.integers(0, 10, NULL_UNITS)
-    units = np.repeat(np.arange(NULL_UNITS), counts)
-    diffs = rng.normal(0.0, 0.02, NULL_UNITS)[units] + rng.normal(0.0, 0.05, units.size)
-    return diffs, units
 
 
 def control_null() -> pd.DataFrame:
@@ -1039,47 +831,34 @@ def control_null() -> pd.DataFrame:
     an MDE means -- and with nothing planted, at most 5%. Both rates are read against a binomial
     99% interval fixed before the run (invariant 9).
     """
-    p_null = np.empty(CONTROL_REPETITIONS)
-    p_planted = np.empty(CONTROL_REPETITIONS)
-    for repetition in range(CONTROL_REPETITIONS):
-        diffs, units = _unit_structured_diffs(np.random.default_rng([NULL_UNIT_SEED, repetition]))
-        null = summarize_redraws(
-            float(diffs.mean()),
-            redraw_estimates(diffs, units, NULL_UNITS, N_DRAWS, repetition),
-        )
-        shifted = diffs + null["mde"]
-        planted = summarize_redraws(
-            float(shifted.mean()),
-            redraw_estimates(shifted, units, NULL_UNITS, N_DRAWS, repetition),
-        )
-        p_null[repetition], p_planted[repetition] = null["p"], planted["p"]
+    repetitions = null_repetition_pvalues()
 
     rows: list[dict[str, object]] = []
-    detections = int(np.count_nonzero(p_planted < CONTROL_ALPHA))
-    low, high = stats.binom.interval(0.99, CONTROL_REPETITIONS, NULL_DETECTION_RATE)
+    detections = int(np.count_nonzero(repetitions.p_planted < ALPHA))
+    low, high = stats.binom.interval(0.99, REPETITIONS, DETECTION_RATE)
     rows.append(
         {
             "check": "detection_at_mde",
-            "target_rate": NULL_DETECTION_RATE,
-            "repetitions": CONTROL_REPETITIONS,
-            "alpha": CONTROL_ALPHA,
+            "target_rate": DETECTION_RATE,
+            "repetitions": REPETITIONS,
+            "alpha": ALPHA,
             "detections": detections,
-            "rate": detections / CONTROL_REPETITIONS,
+            "rate": detections / REPETITIONS,
             "ci_lo": float(low),
             "ci_hi": float(high),
             "inside_interval": bool(float(low) <= detections <= float(high)),
         }
     )
-    false_positives = int(np.count_nonzero(p_null < CONTROL_ALPHA))
-    fp_low, fp_high = stats.binom.interval(0.99, CONTROL_REPETITIONS, CONTROL_ALPHA)
+    false_positives = int(np.count_nonzero(repetitions.p_null < ALPHA))
+    fp_low, fp_high = stats.binom.interval(0.99, REPETITIONS, ALPHA)
     rows.append(
         {
             "check": "false_positive_rate",
-            "target_rate": CONTROL_ALPHA,
-            "repetitions": CONTROL_REPETITIONS,
-            "alpha": CONTROL_ALPHA,
+            "target_rate": ALPHA,
+            "repetitions": REPETITIONS,
+            "alpha": ALPHA,
             "detections": false_positives,
-            "rate": false_positives / CONTROL_REPETITIONS,
+            "rate": false_positives / REPETITIONS,
             "ci_lo": float(fp_low),
             "ci_hi": float(fp_high),
             # One-sided: a rate below the interval is a conservative test, not a defect.
@@ -1137,6 +916,14 @@ def read_build_tables(
         grids[f"stack_{version}"] = pd.read_csv(files[f"identity_grid_stack_{version}"])
     cells = pd.read_csv(files["cells"])
     weights = cast(dict[str, Any], json.loads(files["weights_check"].read_text()))
+    absent = [key for key in WEIGHTS_CHECK_KEYS if key not in weights]
+    if absent:
+        raise SystemExit(
+            f"combine refuses: {files['weights_check']} has no {absent}. The build control's "
+            "weights row is H2's premise -- that the drug fine-tune is a different model from "
+            "the base checkpoint -- and defaulting the missing keys would publish "
+            "'encoders differ, 0 tensors differ' from an empty or renamed file"
+        )
     return matches, grids, cells, weights
 
 
@@ -1179,10 +966,12 @@ def control_build(matches: pd.DataFrame, weights: Mapping[str, Any]) -> pd.DataF
             "n_lines": None,
             "n_shuffles": None,
             "above_null_p99": None,
-            "n_shared_tensors": int(weights.get("n_shared", 0)),
-            "n_identical_tensors": int(weights.get("n_identical", 0)),
-            "n_different_tensors": int(weights.get("n_different", 0)),
-            "encoders_identical": bool(weights.get("identical_all", False)),
+            # Indexed, never defaulted: read_build_tables has already refused a file missing any
+            # of these, and a direct KeyError here is still louder than a manufactured number.
+            "n_shared_tensors": int(weights["n_shared"]),
+            "n_identical_tensors": int(weights["n_identical"]),
+            "n_different_tensors": int(weights["n_different"]),
+            "encoders_identical": bool(weights["identical_all"]),
         }
     )
     return pd.DataFrame(rows, columns=list(BUILD_CONTROL_COLUMNS))
@@ -1225,7 +1014,12 @@ def write_table(path: Path, frame: pd.DataFrame, columns: Sequence[str]) -> Path
 
 
 def _git_sha() -> str:
-    """The commit this run was made at, or ``"unknown"`` when git cannot answer."""
+    """The commit this run was made at.
+
+    Raises rather than recording ``"unknown"``: project rule 1 makes the producing commit one of
+    the three things that cannot be recovered afterwards, so a provenance record without it is
+    not a provenance record -- it only looks like one.
+    """
     try:
         finished = subprocess.run(
             ["git", "-C", str(REPO), "rev-parse", "HEAD"],
@@ -1234,9 +1028,15 @@ def _git_sha() -> str:
             check=True,
             timeout=30,
         )
-    except (OSError, subprocess.SubprocessError):
-        return "unknown"
-    return finished.stdout.strip() or "unknown"
+    except (OSError, subprocess.SubprocessError) as error:
+        raise SystemExit(
+            f"combine refuses: git could not name the commit this run was made at ({error}); "
+            "the parameter sidecar cannot record the producing commit"
+        ) from error
+    sha = finished.stdout.strip()
+    if not sha:
+        raise SystemExit("combine refuses: git rev-parse HEAD returned nothing")
+    return sha
 
 
 def input_files(cache: Path, out_dir: Path, grid: Grid) -> dict[str, Path]:
@@ -1250,10 +1050,20 @@ def input_files(cache: Path, out_dir: Path, grid: Grid) -> dict[str, Path]:
     files: dict[str, Path] = {}
 
     def add(root_name: str, root: Path, path: Path) -> None:
-        if path.exists():
-            files[f"{root_name}/{path.relative_to(root).as_posix()}"] = path
+        """Pin one input, refusing if it is not there.
 
-    for name in ("rung1_grid.json", "answers.npz", "descriptions.npz", "tanimoto.npz"):
+        A missing file must not simply be left out: this is the record the audit pins bytes
+        with, and an input that silently stops being listed reads as "not an input to this run"
+        rather than as the gap it is.
+        """
+        if not path.exists():
+            raise SystemExit(
+                f"combine refuses: {path} is missing, so the parameter sidecar cannot pin it. "
+                "Every input the run read has to appear in the record with its sha256"
+            )
+        files[f"{root_name}/{path.relative_to(root).as_posix()}"] = path
+
+    for name in ("answers.npz", "descriptions.npz", "tanimoto.npz"):
         add("cache", cache, cache / name)
     for version in STACK_VERSIONS:
         add("cache", cache, cache / f"embedding_{version}.parquet")
@@ -1264,10 +1074,21 @@ def input_files(cache: Path, out_dir: Path, grid: Grid) -> dict[str, Path]:
     for block in range(N_BLOCKS):
         add("cache", cache, Path(_REDRAWS.block_path(cache, block)))
 
-    add("out_dir", out_dir, out_dir / "rung1_grid.json")
     add("out_dir", out_dir, out_dir / "rung1_ceiling.csv")
     for path in build_inputs(out_dir).values():
         add("out_dir", out_dir, path)
+
+    # The grid is written by its own stage into --out-dir and copied into the cache by some
+    # runs, so it legitimately lives in either root -- but it must be in one of them.
+    grid_roots = [("cache", cache), ("out_dir", out_dir)]
+    found = [(name, root) for name, root in grid_roots if (root / "rung1_grid.json").exists()]
+    if not found:
+        raise SystemExit(
+            f"combine refuses: rung1_grid.json is in neither {cache} nor {out_dir}, so the "
+            "sidecar cannot pin the grid the run was restricted to"
+        )
+    for name, root in found:
+        add(name, root, root / "rung1_grid.json")
     return files
 
 
@@ -1300,7 +1121,7 @@ def params_record(
             "random_stand_ins": dict(RANDOM_SEEDS),
             "nmf": NMF_SEED,
             "controls": {
-                "redraw": CONTROL_REDRAW_SEED,
+                "redraw": REDRAW_SEED,
                 "fit": dict(FIT_SEEDS),
                 "fit_null_grid": FIT_NULL_GRID_SEED,
                 "fit_null_stand_in": FIT_NULL_STAND_IN_SEED,
