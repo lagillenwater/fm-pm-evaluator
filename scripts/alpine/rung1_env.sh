@@ -12,6 +12,14 @@ export PYTHONUNBUFFERED=1   # else stdout block-buffers to the log file and a mu
 export HF_HUB_CACHE="/scratch/alpine/$USER/hf"
 # do NOT set HF_HOME to scratch -- that hides the token `hf auth login` saved under the HF cache:
 export HF_TOKEN="${HF_TOKEN:-$(cat "${XDG_CACHE_HOME:-$HOME/.cache}/huggingface/token" 2>/dev/null || true)}"
+# `hf auth login --add-to-git-credential` stored the token in ~/.git-credentials rather than the
+# token file above (found 2026-09-12); read it from there when nothing else set it. An EMPTY
+# HF_TOKEN must not stay exported: huggingface_hub then sends "Authorization: Bearer " and every
+# request fails (job 32425977).
+if [ -z "${HF_TOKEN:-}" ] && [ -r "$HOME/.git-credentials" ]; then
+    HF_TOKEN="$(grep -m1 'huggingface.co' "$HOME/.git-credentials" | sed -E 's#https://[^:]*:([^@]*)@.*#\1#')"
+fi
+if [ -z "${HF_TOKEN:-}" ]; then unset HF_TOKEN; else export HF_TOKEN; fi
 
 # Pinned to the pyproject floors with upper bounds so a fallback install can't drift the
 # persistent stack env to an untested major version. anndata, torch and stack are already in
