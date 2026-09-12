@@ -71,7 +71,16 @@ def wanted_samples(drugs: list[str]) -> tuple[dict[str, str], set[str]]:
     return dict(zip(treated["sample"].astype(str), treated[drug_col].astype(str))), dmso
 
 
-def crosswalk(tahoe_de_dir: Path, lines: list[str]) -> dict[str, str]:
+def crosswalk(tahoe_de_dir: Path, lines: list[str], csv: Path | None = None) -> dict[str, str]:
+    """Cellosaurus -> DepMap for the block's lines: from the crosswalk table the earlier lineage
+    built (line, cellosaurus, cell_name) when given, else from the DE shards' own columns."""
+    if csv is not None and csv.exists():
+        df = pd.read_csv(csv)
+        cw = {str(c): str(l) for l, c in zip(df["line"], df["cellosaurus"]) if str(l) in set(lines)}
+        if len(set(cw.values())) < len(lines):
+            raise RuntimeError(f"crosswalk {csv} misses lines: {sorted(set(lines) - set(cw.values()))}")
+        log(f"crosswalk: {len(cw)} lines from {csv}")
+        return cw
     import duckdb
 
     shards = sorted(str(p) for p in tahoe_de_dir.rglob("*.parquet") if "pseudobulk_differential_expression" in str(p))
@@ -117,7 +126,7 @@ def run_block(args: argparse.Namespace) -> None:
     t = np.load(args.tensors, allow_pickle=True)
     lines, drugs, genes = [str(x) for x in t["lines"]], [str(x) for x in t["drugs"]], pd.Index(t["genes"])
     sample_drug, dmso_samples = wanted_samples(drugs)
-    cw = crosswalk(args.tahoe_dir, lines)
+    cw = crosswalk(args.tahoe_dir, lines, args.crosswalk)
     lookup = gene_lookup(genes)
     shards = list_shards()
     mine = [(i, s) for i, s in enumerate(shards) if i % args.n_blocks == args.block]
@@ -232,6 +241,8 @@ def main() -> None:
     ap.add_argument("--tahoe-dir", type=Path, required=True, help="DE shards on scratch, for the Cellosaurus -> DepMap crosswalk")
     ap.add_argument("--cache", type=Path, required=True)
     ap.add_argument("--out", type=Path, required=True)
+    ap.add_argument("--crosswalk", type=Path, default=Path("docs/tasks/rung1-held-out-prediction/rung1_line_crosswalk.csv"),
+                    help="line,cellosaurus table; falls back to a duckdb read of the DE shards if absent")
     ap.add_argument("--n-blocks", type=int, default=16)
     ap.add_argument("--block", type=int, default=None)
     ap.add_argument("--combine", action="store_true")
