@@ -348,7 +348,7 @@ def write_build_tables(out_dir: Path) -> None:
     (out_dir / "rung1_weights_check.json").write_text(
         json.dumps(
             {
-                "drug_checkpoint": "epoch=5-val_loss=6.1078.ckpt",
+                "drug_checkpoint": "finetuned-epoch=5-val_loss=6.1078.ckpt",
                 "base_checkpoint": "bc_large.ckpt",
                 "head_suffixes": [".decoder.weight"],
                 "n_shared": 10,

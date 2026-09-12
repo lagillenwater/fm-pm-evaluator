@@ -49,9 +49,11 @@ pyarrow (the answers scan), anndata and Stack (`arc_stack` 0.1.3, Alpine only), 
 | `src/fmharness/heldout/controls.py` | synthetic grids with planted answers, shared by tests and the combine job |
 | `src/fmharness/heldout/figures.py` | every design §8 figure, each drawn from a written table |
 | `src/fmharness/heldout/leakage.py` | `LeakageProfile` records per model version |
+| `src/fmharness/heldout/records.py` | the `<name>.done.json` completion record every stage writes beside its output: its sha256, and what "already done" means |
 | `scripts/heldout_grid.py` | writes grid, ceiling and restriction record (runs locally or on Alpine) |
 | `scripts/heldout_answers.py` | one gene slice of the answers scan (reuses rung 0's DuckDB helpers); `--combine` |
 | `scripts/heldout_dmso_cells.py` | one shard block of DMSO cells from Hugging Face; `--combine` |
+| `scripts/heldout_fetch_metadata.py` | downloads the pinned drug and gene metadata tables once, so 64 DMSO tasks do not each open their own Hugging Face handle |
 | `scripts/heldout_embed.py` | Stack embeddings per line and per half, one model load per version (Alpine only) |
 | `scripts/strip_ckpt_head.py` | ported from the archive: encoder-only copy of an aligned checkpoint |
 | `scripts/heldout_descriptions.py` | expression, PCA, NMF, random stand-ins, fingerprints, identity-match table |
@@ -59,8 +61,10 @@ pyarrow (the answers scan), anndata and Stack (`arc_stack` 0.1.3, Alpine only), 
 | `scripts/heldout_redraws.py` | one block of redraws for every comparison |
 | `scripts/heldout_combine.py` | gathers rounds and redraws; writes result tables, control tables, figures, params sidecar |
 | `scripts/verify_rung1.py` | the verification battery (claim / recomputed / pass-fail) |
+| `scripts/heldout_smoke_import.py` | imports every rung 1 module under Alpine's Python 3.10 before any long stage runs |
+| `scripts/make_verify_nb.py`, `scripts/make_summary_nb.py` | write `verify.ipynb` and `summary.ipynb`; the committed notebooks are their output, byte for byte (ruling 44) |
 | `scripts/alpine/rung1_env.sh`, `rung1_*.sbatch`, `submit_rung1_chain.sh` | the job chain of design §9 |
-| `tests/test_heldout_*.py`, `tests/test_rung1_controls.py`, `tests/test_verify_rung1.py`, `tests/test_tahoe.py` | unit and known-answer tests |
+| `tests/test_heldout_*.py`, `tests/test_rung1_controls.py`, `tests/test_verify_rung1.py`, `tests/test_tahoe.py`, `tests/test_notebook_generators.py` | unit and known-answer tests |
 
 ## Data contracts between stages
 
@@ -86,7 +90,9 @@ so a rerun skips finished work and the audit can pin bytes.
    reads `delta[:, held]`. Test: replace the held-out entries with arbitrary values; predictions are
    bit-identical (`test_lolo_ignores_held_out_answers`, `test_lodo_ignores_held_out_answers`).
 2. **Every model is scored on the same pairs.** Scoreability depends on the answer alone; excluded pairs are
-   removed before scoring (`test_scoreable_pairs_do_not_depend_on_the_model`).
+   removed before scoring (`test_scoreable_boundary_49_versus_50_responding_genes`,
+   `test_excluded_pairs_are_false_even_when_otherwise_scoreable`, and, across every model of a run,
+   `test_the_excluded_pair_is_scored_for_no_model`).
 3. **Descriptions carry no drug response.** Built only from DMSO cells (`test_descriptions_read_only_dmso_cells`).
 4. **Determinism.** Cell selection, random stand-ins, NMF and redraws are seeded; reruns are bit-identical
    (`test_cell_selection_is_independent_of_shard_order`, `test_redraws_are_seeded`).

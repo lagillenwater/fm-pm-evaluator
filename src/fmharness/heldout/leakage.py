@@ -42,7 +42,7 @@ from fmharness.heldout.grid import SCIPLEX_CIDS, SCIPLEX_LINE, Grid, sciplex_exp
 STACK_CHECKPOINTS: tuple[tuple[str, str], ...] = (
     ("stack_base", "bc_large.ckpt"),
     ("stack_cytokine", "bc_large_aligned.ckpt"),
-    ("stack_drug", "epoch=5-val_loss=6.1078.ckpt"),
+    ("stack_drug", "finetuned-epoch=5-val_loss=6.1078.ckpt"),
 )
 
 #: The one version fine-tuned on the sci-Plex screen, and so the one with drug exposure.

@@ -50,7 +50,7 @@ Each line is described once, from untreated cells given only the solvent dimethy
 | NMF | *non-negative matrix factorization*: expression rebuilt as a mix of a few gene programs |
 | Stack base | the average Stack embedding of the line's cells, from the pretrained `bc_large.ckpt` |
 | Stack cytokine | the same, from the released cytokine-tuned `bc_large_aligned.ckpt` |
-| Stack drug | the same, from our sci-Plex fine-tune of `bc_large.ckpt` (archive file `epoch=5-val_loss=6.1078.ckpt`) |
+| Stack drug | the same, from our sci-Plex fine-tune of `bc_large.ckpt` (archive file `finetuned-epoch=5-val_loss=6.1078.ckpt`) |
 | Random stand-in | random numbers of the same size, drawn once per line with a fixed seed |
 
 - **Cells.** Every description uses the same cells: up to 1,000 DMSO cells per line, spread evenly over its
@@ -192,11 +192,12 @@ tests locally.
 
 | Stage | How it runs in parallel | Waits for |
 |---|---|---|
-| 1. DMSO cells and drug table (Hugging Face) | array over source files, at most 4 at once (`%4`); many readers get rate-limited | — |
-| 2. Answers (5 uM, 107 drugs) | read rung 0's 32 cached gene slices; if scratch was purged, re-run rung 0's slice array with these filters | — |
+| 0. Grid, ceiling and line crosswalk | one job; both data stages read the `rung1_grid.json` it writes | — |
+| 1. DMSO cells and drug table (Hugging Face) | array over source files, at most 4 at once (`%4`); many readers get rate-limited | 0 |
+| 2. Answers (5 uM, 107 drugs) | read rung 0's 32 cached gene slices; if scratch was purged, re-run rung 0's slice array with these filters | 0 |
 | 3. Stack embeddings | 3-task GPU array: base, cytokine, drug | 1 |
 | 4. Expression, PCA, NMF, random descriptions | one small job | 1 |
-| 5. Model fits | 157-task array, one per round (50 lines + 107 drugs), every model per task | 2, 3, 4 |
+| 5. Model fits | 157-task array, one per round (50 lines + 107 drugs), every model per task | nothing, unless the operator passes `--after <job id>` (`decisions.md`, 2026-09-11) |
 | 6. Redraws | array: 8 tasks × 250 redraws, per test | 5 |
 | 7. Tables and figures | one job | 6 |
 

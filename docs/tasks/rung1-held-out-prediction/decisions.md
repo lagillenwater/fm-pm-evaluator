@@ -129,10 +129,6 @@ document they amend. `design.md` carries the current position.
     crosswalk and exclusion tests run offline.
   - **Data jobs submitted after Task 6.** Task 11's data stages depend only on Tasks 1–6, so they are submitted
     as soon as those land, while the models are built.
-- **2026-09-11** — **The answers are scanned, not read from rung 0's cache.** Rung 0's cache keeps only genes
-  with a fold change in both plate halves (`frame_from_slice`). The design defines the answer over every gene
-  measured on at least one plate. Reading the cache would have narrowed an approved definition; one filtered
-  scan keeps it, at the cost of a few hours of cluster time.
 - **2026-09-11** — **REVERSAL of plan invariant 6: tuning re-estimates the reference without the left-out unit.**
   - **The problem:** found by Task 7's review. The plan held the drug average fixed while leaving one training line
     out. That average contains the left-out line, so its departures from it sum with the others' to zero, and the
@@ -147,8 +143,71 @@ document they amend. `design.md` carries the current position.
     gains `diag((1−g_j)/(1−h_j))·Uᵀ R_j/(D−1)`, with `g_j[c] = Σ_a U_d[j,a]·(U_dᵀ1)[a]·w_ca/(w_ca+λ)`.
   - **Standing:** this is closer to the design's "chosen by leaving out one training line (or drug) at a time" than
     the plan's simplification was, so it is a plan correction, not a design change.
+- **2026-09-11** — **The two notebooks are generated, and their generators are in the repository** (fix wave;
+  ruling 44, audit ruling 1). `verify.ipynb` and `summary.ipynb` are written by `scripts/make_verify_nb.py`
+  and `scripts/make_summary_nb.py`, now in the file map above.
+  - **Why:** the generators existed on the author's machine and in no branch. Nobody else could regenerate
+    either notebook, and the next edit to a committed notebook would have diverged from its generator
+    silently — whichever ran last destroying the other's work. That is the failure the lab's "automation must
+    be version controlled" standard exists to prevent.
+  - **What keeps them honest:** `tests/test_notebook_generators.py` fails unless each generator reproduces its
+    committed notebook byte for byte. Both do, at 49,752 and 37,249 bytes.
+  - **Reconstructed, not moved:** the originals were in no commit and nowhere on disk to move, so the
+    committed generators were rebuilt from the notebooks they produce and verified against them. They are the
+    notebooks' source from here on: edit the text there, run the script, commit both.
 
 ## design.md (execution)
+
+- **2026-09-11** — **The answers are scanned, not read from rung 0's cache.** Rung 0's cache keeps only genes
+  with a fold change in both plate halves (`frame_from_slice`). The design defines the answer over every gene
+  measured on at least one plate. Reading the cache would have narrowed an approved definition; one filtered
+  scan keeps it, at the cost of a few hours of cluster time.
+  - **Filed here in the fix wave** (audit observation O1). It sat under the `## plan.md` heading, but the text
+    it contradicts is design §9's stage 2 — "read rung 0's 32 cached gene slices" — so it belongs under the
+    document it amends (project rule 2). Nothing about the decision changed.
+- **2026-09-11** — **Design §9's stage table corrected: the grid stage is in it, and stage 5 waits for nothing
+  on its own** (fix wave; audit drift D108 and D113).
+  - **What was wrong:** the table listed no grid stage at all, though `scripts/alpine/rung1_grid.sbatch` is in
+    the tree and `submit_rung1_chain.sh` makes BOTH data stages depend on it — so stages 1 and 2 were shown
+    waiting for nothing. Stage 5 was shown waiting for stages 2, 3 and 4, which it does not.
+  - **What the chain does:** `--stage data` and `--stage fit` are two chains. Inside each, every dependency is
+    a real `--dependency=afterok`, read back with `ralpine jobinfo`. Between them there is none: the fit array
+    waits only when the operator passes `--after <the last data job's id>`. Starting 157 tasks against a
+    missing `answers.npz` fails 157 times in seconds.
+  - **Why it stays:** the two stages are submitted days apart — the data stage goes as soon as tasks 1–6 land,
+    while the models are still being built (plan.md task 11) — so at data-submission time there is no fit job
+    to attach, and at fit-submission time the data job id may be long gone. `verification.md` tells the
+    operator to sequence it; this entry is the record the audit found missing.
+- **2026-09-11** — **The leakage record names the checkpoint that is actually loaded** (fix wave; audit drift
+  D26). `leakage.py`'s `STACK_CHECKPOINTS` and design §4 both said `epoch=5-val_loss=6.1078.ckpt`, while the
+  only places that say what is loaded — `scripts/heldout_embed.py` and `CKPT_DRUG` in
+  `scripts/alpine/rung1_env.sh` — say `finetuned-epoch=5-val_loss=6.1078.ckpt`. Both now name the file the run
+  opens: a provenance record naming a file that is not on the cluster pins nothing. The run confirms it
+  (audit checklist PR-4).
+- **2026-09-11** — **`docs/SPEC.md`'s rung 1 entry rewritten to the approved design** (fix wave; ruling 45,
+  audit drift D131). Design §12 says the entry is rewritten on approval to match §1–§7, with the proposed text
+  in this file. What was applied differed from that text in four of six fields, unrecorded. The design is what
+  Lucas approved, so the entry now follows the proposed text; field by field, the applied version differed as:
+  - **Question** — identical. Unchanged.
+  - **Adds** — had gained ", not by what the split assumes". Dropped: §3 makes no claim about what a split
+    assumes, and the proposal's sentence is what the design supports.
+  - **Measure** — had been expanded into a longer gloss of the √SB argument. Restored to the proposal, which
+    says the same thing in the design's own words and leaves the derivation to §6.
+  - **Reports** — rewritten, and deliberately not back to the proposal either: see the next entry (ruling 46).
+  - **Why it matters** — had been replaced by a differently-worded "How it contextualises the rest". Restored
+    to the proposal's wording and its label.
+  - **Tasks** — a line the applied text added. **Kept**: every other rung entry in `SPEC.md` carries one and
+    the audit verdicted it ALIGNED (S10). It is the one applied change that stands.
+- **2026-09-11** — **`docs/SPEC.md`'s comparison sentence corrected to the design's actual structure** (fix
+  wave; ruling 46, audit drift S6).
+  - **What it said:** "every line description against the line-blind reference" — and the proposed text in
+    this file said "each line description against the drug average". Neither is design §7's approved table.
+  - **What §7 declares:** only Stack base is compared with the line-blind reference (the drug average when a
+    line is hidden, chemistry only when a drug is hidden). Expression, PCA, NMF and nearest lines enter as
+    Stack-base-minus-description contrasts, and each description additionally faces its own random stand-in.
+  - **Why the sentence moved and not the experiment:** adding the missing comparisons would enlarge the Holm
+    families of an approved design, which is not a fix wave's business. The rung reports what §7 declares, and
+    SPEC now says so.
 
 - **2026-09-11** — **Recorded departure, §8 fit control: "planted at twice their MDE" is unattainable as written.**
   - **What was measured:** Task 9's implementer measured it on a grid of the screen's size (50 × 107 × 300 genes,

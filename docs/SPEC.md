@@ -62,10 +62,10 @@ The one asymmetry is rung 6 — a registered prospective prediction is frozen in
 ### Rung 1 — can a model predict a cell line or a drug it has not seen?
 
 **Question** Given a line or a drug left out of training, can a model predict the expression change?
-**Adds** One hidden thing at a time, a line or a drug. Same lab method, cells and dose as rung 0. What counts as unseen is set by each model's leakage record, not by what the split assumes.
-**Measure** Rung 0's score — per-pair correlation across genes between predicted and measured change, averaged over pairs — at one dose, on a grid where every drug was measured in every line, for responding genes and for all genes. Each model's score is also given as a fraction of √SB, the square root of rung 0's full-data (Spearman-Brown) reliability on the same pairs: two measurements share noise twice, a prediction meets it once, so a perfect prediction scores √SB, not SB.
-**Reports** Head-to-head comparisons between models on the same pairs, each with a confidence interval, p-value and minimum detectable effect, including every line description against the line-blind reference and against a random stand-in of the same size. The hypotheses under test are named in the task's design. The rung reports results; it has no pass mark.
-**How it contextualises the rest** A model that cannot beat the line-blind reference when only the line or only the drug is new carries that shortfall into every harder setting, so a shortfall above this rung is not evidence about organoids, platforms or readouts.
+**Adds** One hidden thing at a time, a line or a drug. Same lab method, cells and dose as rung 0. What counts as unseen is set by each model's leakage record.
+**Measure** Rung 0's score (per-pair correlation across genes, averaged over pairs), at one dose, on a grid where every drug was measured in every line, for responding and all genes; also as a fraction of √SB, since a prediction meets measurement noise once, not twice.
+**Reports** Head-to-head comparisons with confidence intervals, p-values and MDEs. Stack's summary of a line goes against the line-blind reference — the drug average when a line is hidden, chemistry only when a drug is hidden — and against each of the other line descriptions (expression, PCA, NMF, and nearest lines when a line is hidden); the drug fine-tune goes against the cytokine-tuned release; and every description also goes against a random stand-in of the same size. The hypotheses under test are named in the task's design. No pass mark.
+**Why it matters** A model that cannot beat the drug average when only the line or drug is new will not do better when more changes.
 **Tasks** [docs/tasks/rung1-held-out-prediction/design.md](tasks/rung1-held-out-prediction/design.md) — OPEN, design approved 2026-09-11.
 
 ### Rung 2 — can a bulk sample be read by a single-cell model?

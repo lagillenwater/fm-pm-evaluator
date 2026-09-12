@@ -63,28 +63,33 @@ the 14 rounds, all 8 redraw blocks and the combine, each through its own command
 what the battery and both notebooks were run against while the cluster is down.
 
 ```
-uv run pytest -o addopts="" -q                    462 passed, 9 skipped, 7 warnings (3 m 31 s)
-uv run pytest tests/test_rung1_jobs.py            71 passed, 8 skipped
+uv run pytest -o addopts="" -q                    487 passed, 9 skipped, 0 warnings (3 m 47 s)
+uv run pytest -o addopts="" -q -W error           487 passed, 9 skipped (3 m 44 s)
+uv run pytest tests/test_rung1_jobs.py            73 passed, 8 skipped
 uv run pytest tests/test_verify_rung1.py \
               tests/test_heldout_pipeline.py \
-              -W error                            48 passed, 1 skipped
-uv run ruff check <scripts, tests, notebooks>     All checks passed!
-uv run ruff format --check <the same>             already formatted
-uv run pyright                                    0 errors, 0 warnings, 0 informations
-uv run pyright scripts/verify_rung1.py            0 errors, 0 warnings, 0 informations
+              -W error                            63 passed, 1 skipped
+uv run pytest tests/test_notebook_generators.py   6 passed
+uv run ruff check src tests scripts               All checks passed!
+uv run ruff format --check src tests scripts      74 files already formatted
+uv run pyright  (src, tests, verify_rung1.py)     0 errors, 0 warnings, 0 informations
 uv run --python 3.10 ... heldout_smoke_import.py  python 3.10.20 / ok
 ```
 
-The 7 warnings are task 4's anndata `ImplicitModificationWarning`s in `tests/test_heldout_cells.py`
-and pre-date this task; the 9 skips are the tests that need artifacts this tree does not have
-(the committed-run check) or rules that do not apply to a job (the DuckDB overhead rule, which
-binds only the jobs that scan the DE table).
+**No warnings**, and the suite passes under `-W error` — "test output must be pristine" is a
+binding constraint, not a preference. The 7 anndata `ImplicitModificationWarning`s this record
+previously waived as pre-dating the task were not a test's doing at all: `write_line_h5ad` built
+its `AnnData` from a frame with a range index, and anndata converted the index and said so. `obs`
+and `var` now carry string indexes before the object exists (fix wave, 2026-09-11). The 9 skips
+are the tests that need artifacts this tree does not have (the committed-run check) or rules that
+do not apply to a job (the DuckDB overhead rule, which binds only the jobs that scan the DE
+table).
 
 **The battery, against the fixture run:**
 
 ```
 uv run python scripts/verify_rung1.py --task-dir <fixture out> --cache <fixture cache>
-38 / 38 checks pass (8 skipped, 46 total)          exit status 0
+43 / 43 checks pass (8 skipped, 51 total)          exit status 0
 ```
 
 The 8 skips are stated, not waived: three claims hold only of the design's 50 × 107 grid (its
@@ -92,7 +97,11 @@ The 8 skips are stated, not waived: three claims hold only of the design's 50 ×
 the grid), three need rung 0's promoted table to contain this grid's pairs, and two need the grid
 record's hashes, which the fixture does not write. `tests/test_verify_rung1.py` exercises each of
 those paths on inputs that do have them, and requires the battery to **fail** when a mean score,
-a comparison estimate, a Holm adjustment, a removed pair or a pinned input's checksum is moved.
+a comparison estimate, a Holm adjustment, a removed pair, a pinned input's checksum, or a model
+summary's interval, standard deviation or MDE is moved. That last family has no written draws
+behind it — the combine redraws it in its own process — so the battery redraws the held-out units
+itself from the committed per-pair scores and the seed the sidecar records, rather than checking
+only that each interval contains its mean, which a tenfold standard deviation passes.
 
 **Both reviewer notebooks, executed end to end** (`jupyter nbconvert --execute`, against the same
 fixture run):
@@ -110,7 +119,10 @@ summary.ipynb   0 errors; "run present: False"
 ```
 
 Both notebooks are committed **without outputs**, so the figures and numbers a reviewer sees are
-the ones their own execution produced.
+the ones their own execution produced. They are written by `scripts/make_verify_nb.py` and
+`scripts/make_summary_nb.py`, which are now in the repository rather than on one machine;
+`tests/test_notebook_generators.py` fails unless each reproduces its committed notebook byte for
+byte, which it does at 49,752 and 37,249 bytes (ruling 44).
 
 ## Where everything is
 
