@@ -80,9 +80,10 @@ DOSE_UM = 5.0
 DESIGN_LINES, DESIGN_DRUGS = 50, 107
 DESIGN_PAIRS = DESIGN_LINES * DESIGN_DRUGS
 
-#: Design section 6's ceilings and the pairs rung 0 scored behind them.
+#: Design section 6's ceilings. The pair counts behind them (4,593 responding, 5,350 all) are
+#: not transcribed here: the ceiling check recomputes them from rung 0's promoted table, which
+#: is a stronger statement than agreeing with a number copied out of the design.
 DESIGN_CEILING = {"responding": 0.8575, "all": 0.3876}
-DESIGN_CEILING_PAIRS = {"responding": 4593, "all": 5350}
 
 SCHEMES = ("lolo", "lodo")
 GENE_SETS = ("responding", "all")
