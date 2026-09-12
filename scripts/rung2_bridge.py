@@ -64,21 +64,48 @@ def crosswalk(tahoe_de_dir: Path, lines: np.ndarray) -> dict[str, str]:
     import duckdb
 
     shards = sorted(str(p) for p in tahoe_de_dir.rglob("*.parquet") if "pseudobulk_differential_expression" in str(p))
+    # the shards are laid out by line, so every third is the density that reaches every line
     df = duckdb.connect().execute(
         "SELECT DISTINCT Cell_ID_Cellosaur AS cvcl, Cell_ID_DepMap AS depmap FROM read_parquet(?) WHERE Cell_ID_DepMap IS NOT NULL",
-        [shards[::40]],
+        [shards[::3]],
     ).df()
     wanted = set(lines)
     cw = {c: d for c, d in zip(df["cvcl"], df["depmap"]) if d in wanted}
     log(f"crosswalk: {len(cw)} of {len(wanted)} lines have a Cellosaurus id in the sampled shards")
+    if len(set(cw.values())) < len(wanted):
+        raise RuntimeError(f"crosswalk misses lines: {sorted(wanted - set(cw.values()))}")
     return cw
+
+
+def gene_metadata(revision: str) -> pd.DataFrame:
+    """Tahoe's token_id -> gene_symbol table from the local Hugging Face cache (no network);
+    falls back to the Hub only if the cached snapshot is absent."""
+    cache = Path(os.environ.get("HF_HUB_CACHE", Path.home() / ".cache/huggingface/hub"))
+    local = cache / "datasets--tahoebio--Tahoe-100M" / "snapshots" / revision / "metadata" / "gene_metadata.parquet"
+    if local.exists():
+        log(f"gene metadata from the local snapshot {local}")
+        return pd.read_parquet(local)
+    from datasets import load_dataset
+
+    return load_dataset(TAHOE, "gene_metadata", split="train", revision=revision).to_pandas()
+
+
+def with_retries(fn, what: str, tries: int = 6):
+    """Anonymous Hub calls get rate-limited on a shared cluster address; back off and retry."""
+    for attempt in range(tries):
+        try:
+            return fn()
+        except Exception as exc:  # noqa: BLE001 -- any Hub/HTTP failure is retried the same way
+            wait = 30 * (attempt + 1)
+            log(f"{what}: {type(exc).__name__}: {str(exc)[:120]} -- retry {attempt + 1}/{tries} in {wait}s")
+            time.sleep(wait)
+    raise RuntimeError(f"{what}: gave up after {tries} attempts")
 
 
 def cells(args: argparse.Namespace) -> None:
     import anndata as ad
     import pyarrow.compute as pc
     import pyarrow.parquet as pq
-    from datasets import load_dataset
     from huggingface_hub import HfApi, HfFileSystem
     from scipy import sparse
 
@@ -91,13 +118,13 @@ def cells(args: argparse.Namespace) -> None:
     cw = crosswalk(args.tahoe_dir, lines)
     wanted_cvcl = set(cw)
 
-    gm = load_dataset(TAHOE, "gene_metadata", split="train", revision=TAHOE_REVISION).to_pandas()
+    gm = gene_metadata(TAHOE_REVISION)
     col_of = genes.get_indexer(gm["gene_symbol"].astype(str))
     token_to_col = {int(tok): int(c) for tok, c in zip(gm["token_id"], col_of) if c >= 0}
     log(f"gene map: {len(token_to_col)} of {len(gm)} Tahoe tokens are in the rung 1 gene table")
 
-    files = sorted(f for f in HfApi().list_repo_files(TAHOE, repo_type="dataset", revision=TAHOE_REVISION)
-                   if f.startswith("data/") and f.endswith(".parquet"))
+    listing = with_retries(lambda: HfApi().list_repo_files(TAHOE, repo_type="dataset", revision=TAHOE_REVISION), "shard listing")
+    files = sorted(f for f in listing if f.startswith("data/") and f.endswith(".parquet"))
     log(f"{len(files)} expression shards; scanning from the start until every line has {N_REAL} DMSO cells")
     fs = HfFileSystem()
     kept: dict[str, list] = {d: [] for d in cw.values()}
@@ -110,7 +137,8 @@ def cells(args: argparse.Namespace) -> None:
         return all(len(v) >= N_REAL for v in kept.values())
 
     for si, path in enumerate(files[: args.max_shards]):
-        with fs.open(f"datasets/{TAHOE}@{TAHOE_REVISION}/{path}", "rb") as fh:
+        fh = with_retries(lambda: fs.open(f"datasets/{TAHOE}@{TAHOE_REVISION}/{path}", "rb"), f"open {path}")
+        with fh:
             pf = pq.ParquetFile(fh)
             for rg in range(pf.num_row_groups):
                 meta = pf.read_row_group(rg, columns=["drug", "cell_line_id", "plate"])

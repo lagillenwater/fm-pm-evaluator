@@ -24,7 +24,7 @@ source scripts/alpine/rung1_env.sh
 # which leaves an EMPTY token in the environment and huggingface_hub then sends the header
 # "Authorization: Bearer " -- the exact failure of job 32425977. Tahoe-100M is public.
 if [ -z "${HF_TOKEN:-}" ]; then unset HF_TOKEN; fi
-python -c "import datasets" 2>/dev/null || pip install -q "datasets>=2.19,<4"
+python -c "import pyarrow, huggingface_hub" 2>/dev/null || pip install -q "pyarrow>=15" "huggingface_hub>=0.23"
 
 CACHE="${RUNG2_CACHE:-/scratch/alpine/$USER/rung2_bridge/cache}"
 OUT_DIR="${RUNG2_OUT:-/scratch/alpine/$USER/rung2_bridge/results}"
