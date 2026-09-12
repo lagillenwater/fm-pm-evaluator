@@ -29,10 +29,15 @@ HELDOUT_MODULES = (
     "fmharness.heldout.answers",
     "fmharness.heldout.cells",
     "fmharness.heldout.chemistry",
+    "fmharness.heldout.comparisons",
+    "fmharness.heldout.controls",
     "fmharness.heldout.descriptions",
+    "fmharness.heldout.figures",
     "fmharness.heldout.grid",
+    "fmharness.heldout.leakage",
     "fmharness.heldout.models",
     "fmharness.heldout.records",
+    "fmharness.heldout.scoring",
 )
 
 

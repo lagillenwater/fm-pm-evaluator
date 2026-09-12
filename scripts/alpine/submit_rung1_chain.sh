@@ -1,12 +1,10 @@
 #!/usr/bin/env bash
-# Submit rung 1's data stages as a dependency chain:
+# Submit rung 1's stages as dependency chains, one per half of the run:
 #
-#   grid -> answers array -> answers combine -\
-#        \-> dmso array    -> dmso combine    -> embed array
-#                                              -> descriptions
-#
-# The fit, redraw and combine stages (task 11, part B) are `--stage fit`, added once Task 10
-# lands; this script only knows `--stage data`.
+#   --stage data   grid -> answers array -> answers combine -\
+#                       \-> dmso array    -> dmso combine    -> embed array
+#                                                            -> descriptions
+#   --stage fit    fit array (157 rounds) -> redraw array (8 blocks) -> combine
 #
 # Run from the repository root on the LOCAL machine; every submission goes through ralpine so
 # the boundary it enforces holds (PROCESS section 2). Each job id is read from sbatch's own
@@ -19,20 +17,23 @@
 #   scripts/alpine/submit_rung1_chain.sh --stage data --from dmso    # grid + answers done
 #   scripts/alpine/submit_rung1_chain.sh --stage data --from embed   # everything but embed +
 #                                                                    # descriptions done
+#   scripts/alpine/submit_rung1_chain.sh --stage fit                 # rounds, redraws, combine
+#   scripts/alpine/submit_rung1_chain.sh --stage fit --from redraws  # the 157 rounds are done
+#   scripts/alpine/submit_rung1_chain.sh --stage fit --from combine  # the redraws are done too
 set -euo pipefail
 
 RALPINE="$(dirname "${BASH_SOURCE[0]}")/ralpine"
 STAGE=""
-FROM="grid"
+FROM=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --stage)
-      STAGE="${2:?--stage needs a value: data}"
+      STAGE="${2:?--stage needs a value: data or fit}"
       shift 2
       ;;
     --from)
-      FROM="${2:?--from needs a stage: grid, answers, dmso, embed}"
+      FROM="${2:?--from needs a stage: grid, answers, dmso, embed (data); fit, redraws, combine (fit)}"
       shift 2
       ;;
     *)
@@ -42,13 +43,22 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ "$STAGE" != "data" ]]; then
-  echo "only --stage data is implemented here; the fit stage is task 11 part B" >&2
-  exit 1
-fi
-case "$FROM" in
-  grid|answers|dmso|embed) ;;
-  *) echo "--from must be one of: grid, answers, dmso, embed" >&2; exit 1 ;;
+# Each stage resumes from its own first job unless --from says otherwise; a stage before the
+# resume point is simply omitted, as rung 0's chain does.
+case "$STAGE" in
+  data) FROM="${FROM:-grid}" ;;
+  fit) FROM="${FROM:-fit}" ;;
+  *) echo "--stage must be one of: data, fit" >&2; exit 1 ;;
+esac
+case "$STAGE:$FROM" in
+  data:grid|data:answers|data:dmso|data:embed) ;;
+  fit:fit|fit:redraws|fit:combine) ;;
+  *)
+    echo "--from for --stage $STAGE must be one of:" >&2
+    echo "  data: grid, answers, dmso, embed" >&2
+    echo "  fit:  fit, redraws, combine" >&2
+    exit 1
+    ;;
 esac
 
 job_id() { grep -oE '[0-9]+$' <<<"$1" | tail -1; }
@@ -62,6 +72,37 @@ check_dependency() {
   fi
   echo "  job $id: $dep"
 }
+
+# The fit chain (task 11, part B): 157 rounds -> 8 redraw blocks -> one combine. Each stage
+# waits on the WHOLE array before it, never on one task of it: heldout_redraws.py refuses to run
+# until all 157 rounds have valid completion records, and heldout_combine.py until all 8 blocks
+# do, since a comparison taken over some of them is silently a different comparison.
+if [[ "$STAGE" == "fit" ]]; then
+  FIT_DEP=""
+  if [[ "$FROM" == "fit" ]]; then
+    out="$("$RALPINE" submit scripts/alpine/rung1_fit.sbatch)"
+    FIT="$(job_id "$out")"
+    echo "fit array:         job $FIT"
+    FIT_DEP="--dependency=afterok:$FIT"
+  fi
+
+  REDRAWS_DEP=""
+  if [[ "$FROM" == "fit" || "$FROM" == "redraws" ]]; then
+    out="$("$RALPINE" submit scripts/alpine/rung1_redraws.sbatch ${FIT_DEP:+"$FIT_DEP"})"
+    REDRAWS="$(job_id "$out")"
+    echo "redraw array:      job $REDRAWS"
+    [[ -n "$FIT_DEP" ]] && check_dependency "$REDRAWS" "afterok:$FIT"
+    REDRAWS_DEP="--dependency=afterok:$REDRAWS"
+  fi
+
+  out="$("$RALPINE" submit scripts/alpine/rung1_combine.sbatch ${REDRAWS_DEP:+"$REDRAWS_DEP"})"
+  COMBINE="$(job_id "$out")"
+  echo "combine:           job $COMBINE"
+  [[ -n "$REDRAWS_DEP" ]] && check_dependency "$COMBINE" "afterok:$REDRAWS"
+
+  echo "watch with: scripts/alpine/ralpine sq"
+  exit 0
+fi
 
 GRID_DEP=""
 if [[ "$FROM" == "grid" ]]; then
