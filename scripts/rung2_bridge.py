@@ -9,9 +9,11 @@ real cells.
 Populations, each a block whose size is a multiple of Stack's 128-cell set, so every
 attention set holds one population of one line (and one drug):
 
-  baseline   per line: real half A (256 of the 512 DMSO cells, even positions), real half B
-             (256, odd), synthetic (256 drawn from the line's pseudobulk baseline with the
-             library sizes of its real cells, so depth cannot separate them)
+  baseline   per line: real half A (even positions), real half B (odd) and a synthetic
+             population of the same size, drawn from the line's pseudobulk baseline with the
+             library sizes of its real cells so depth cannot separate them. Halves are the
+             largest multiple of 128 the line's DMSO cells allow: 256 at 512 cells, 128 from
+             256 cells.
   treated    per (line, drug) with >= 128 real treated cells at 5 uM: real treated (128) and
              synthetic treated (128 drawn from baseline x 2^lfc with matched libraries)
 
@@ -54,8 +56,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 SET = 128  # base Stack's set size; every block below is a multiple of it
-N_BASE = 512  # real DMSO cells per line the download keeps
-HALF = N_BASE // 2
+N_BASE = 512  # real DMSO cells per line the download keeps at most (some lines have fewer)
 N_TREATED = 128
 SEED = 0
 DMSO = "DMSO_TF"
@@ -102,14 +103,15 @@ def embed(args: argparse.Namespace) -> None:
 
     for i, ln in enumerate(lines):
         C = real[(obs["line"] == ln) & (obs["kind"] == "control")].X.tocsr()[:, shared]
-        if C.shape[0] < N_BASE:
-            log(f"{ln}: {C.shape[0]} real DMSO cells < {N_BASE}, baseline skipped")
+        half = min(N_BASE // 2, (C.shape[0] // 2) // SET * SET)  # the largest multiple-of-SET half the line supports
+        if half < SET:
+            log(f"{ln}: {C.shape[0]} real DMSO cells < {2 * SET}, baseline skipped")
             continue
-        C = C[:N_BASE]
+        C = C[: 2 * half]
         lib = np.asarray(C.sum(1)).ravel()
         prof = E[i][shared]
         p = prof / max(prof.sum(), 1e-12)
-        blocks += [(ln, DMSO, "real_a", C[0::2]), (ln, DMSO, "real_b", C[1::2]), (ln, DMSO, "synthetic", draw(p, lib[:HALF], rng))]
+        blocks += [(ln, DMSO, "real_a", C[0::2]), (ln, DMSO, "real_b", C[1::2]), (ln, DMSO, "synthetic", draw(p, lib[:half], rng))]
     n_base_lines = len({b[0] for b in blocks})
 
     n_pairs = 0
