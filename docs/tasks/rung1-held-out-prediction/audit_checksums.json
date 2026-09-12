@@ -1,0 +1,281 @@
+{
+  "_note": "sha256 of every artifact the rung 1 drift audit read, as of the commit below. No rung 1 run artifact exists yet (Alpine /scratch/alpine unmounted), so no run output is listed.",
+  "_commit_audited": "55adfb7f29b63cbd1b8a4efe8742059b02ab39b0",
+  "_date": "2026-09-11",
+  "_auditor": "fresh reader (Claude Opus 5), dispatched by the controller",
+  "artifacts": {
+    "docs/audit.md": {
+      "sha256": "14b5111bab6e7fd0b55e970fac696838536af7d8b7d480275751169625cdd1a1",
+      "bytes": 6909
+    },
+    "docs/SPEC.md": {
+      "sha256": "f8ddff8d82b4a05fc62e04741d2b12d619f7aca0b7e35418a308b6039a13eb7d",
+      "bytes": 22033
+    },
+    "docs/STATE.md": {
+      "sha256": "9937df99d9143d29f0340dc840a0845c14383262428352b308b67c616b12fce3",
+      "bytes": 5147
+    },
+    "docs/DATA.md": {
+      "sha256": "99546a404929e70dec1c8a3695b54a8c917822b56ff6fa05a62830ba00e21d92",
+      "bytes": 11798
+    },
+    "README.md": {
+      "sha256": "ba40636624fd22bd13f8a0422d77f52a342e76834d9f10792b55a6dd286d4383",
+      "bytes": 6382
+    },
+    "pyproject.toml": {
+      "sha256": "4991c4009659df40e70b91da2a9e25ff3070f5fbbb8d046d08cbaf3cecfebee2",
+      "bytes": 2796
+    },
+    ".superpowers/sdd/plan/task-13-brief.md": {
+      "sha256": "c37bd9e0a29a76e57110ce692ee20477d167c1b7966ffcdeab46f84006af0d5b",
+      "bytes": 6220
+    },
+    "docs/tasks/rung1-held-out-prediction/design.md": {
+      "sha256": "7c39c6fd6a27702e30c353beb4a6a6f75ea1edb96f388b2e8309e78ac7d26bd2",
+      "bytes": 16989
+    },
+    "docs/tasks/rung1-held-out-prediction/plan.md": {
+      "sha256": "a2691a0102f5686b60c6f285a3fbab32af8d1a3b867c845e9f9906f904abf582",
+      "bytes": 29541
+    },
+    "docs/tasks/rung1-held-out-prediction/decisions.md": {
+      "sha256": "e3c53209b1dceda902d00e97228c03d5879e06c3059355c6b42f83b0116b9c07",
+      "bytes": 17676
+    },
+    "docs/tasks/rung1-held-out-prediction/verification.md": {
+      "sha256": "52acd4381fd29afab61d2df966f1865391886b077b6350200606362d78a73a42",
+      "bytes": 8258
+    },
+    "docs/tasks/rung1-held-out-prediction/verify.ipynb": {
+      "sha256": "7ed68fbea291727faf6fe1d3df4dc5be9719b5dcd31ec7f5b045705c64cfed2b",
+      "bytes": 49752
+    },
+    "docs/tasks/rung1-held-out-prediction/summary.ipynb": {
+      "sha256": "a01073e5c6af449715878d8b816ee4681b7337d0b0e3dc03bfb3f1ded4a3678b",
+      "bytes": 37249
+    },
+    "src/fmharness/statistics.py": {
+      "sha256": "06f314d01eb183a9662d94c8d96cb5109181e8590d939bc2f36a828c7ae83e18",
+      "bytes": 6102
+    },
+    "src/fmharness/tahoe.py": {
+      "sha256": "b5826b55a84b3c28e0a58f4e144ba38456ff34dd317f22173b9837eb9171e407",
+      "bytes": 4364
+    },
+    "src/fmharness/heldout/__init__.py": {
+      "sha256": "879d8253beba5a4ca9cdfc4bb619195dc3f182d7efa7b82dcc8d7e99fcc01eb5",
+      "bytes": 3970
+    },
+    "src/fmharness/heldout/answers.py": {
+      "sha256": "88d35d67efcc9c1acc18381461c6f36ef718fb60d0fd3b0b0c05b11abbb4daf4",
+      "bytes": 5706
+    },
+    "src/fmharness/heldout/cells.py": {
+      "sha256": "648cf9c2567a10c112e307b0fa5b16518c2f40dc3e76bd15e7f018d58897f6f4",
+      "bytes": 8905
+    },
+    "src/fmharness/heldout/chemistry.py": {
+      "sha256": "f4569eb881579f3e647e6585908be3bf07537bffaa49dbeb46895273d7599a0c",
+      "bytes": 3487
+    },
+    "src/fmharness/heldout/comparisons.py": {
+      "sha256": "2cba9596e269b768e87f52a0fcb546fa31a12f7dca0d4fc075118e1d46d85178",
+      "bytes": 11469
+    },
+    "src/fmharness/heldout/controls.py": {
+      "sha256": "230c9ff8005a447b93a1bdf3cbddb4fc3624dd8b359ad4512295a28b234c2250",
+      "bytes": 33254
+    },
+    "src/fmharness/heldout/descriptions.py": {
+      "sha256": "b8820e791bc8c715c5716ffa26ad8006000dd0dd6b31538e7c5f29f1d46f8ac5",
+      "bytes": 14574
+    },
+    "src/fmharness/heldout/figures.py": {
+      "sha256": "4ea5b0da338c69422f2f3051aa60a8e730d5cffa9eee3064461be47a51a5edd1",
+      "bytes": 40816
+    },
+    "src/fmharness/heldout/grid.py": {
+      "sha256": "8400116bfbda18ae83d9266efc4cec85cf8fea26be8da2aba9d3ab96147af70f",
+      "bytes": 11540
+    },
+    "src/fmharness/heldout/leakage.py": {
+      "sha256": "79f1bae47d7714965146523e0d000c39a24b8c261616a3ed4f5379ca33b3c9b6",
+      "bytes": 7404
+    },
+    "src/fmharness/heldout/models.py": {
+      "sha256": "c199570e782968be42aefc0ac951bc1ecb4715852302ff5b7a87afbd1388b081",
+      "bytes": 38737
+    },
+    "src/fmharness/heldout/records.py": {
+      "sha256": "735e2646b06c3b767d5f60a836cc811f846d8c19d787d6d392d67657fefdb5b4",
+      "bytes": 2199
+    },
+    "src/fmharness/heldout/scoring.py": {
+      "sha256": "470281c67b14106c95b614b541fa19589f5be22fe877da23b754b7ff518a2729",
+      "bytes": 7539
+    },
+    "scripts/heldout_answers.py": {
+      "sha256": "49b71517a3fa7ccb0c2de5a375abd16c59b98332250c0c4de700823d09a28a49",
+      "bytes": 10379
+    },
+    "scripts/heldout_combine.py": {
+      "sha256": "82b5b018367aa691bafd9a4832ec7aec2711cac23dc3bfbeb2af0b9c90d8e862",
+      "bytes": 51433
+    },
+    "scripts/heldout_descriptions.py": {
+      "sha256": "feb2b1fe710a02b75832c753cbc8554cf49b17094268be33976df87446ed0cb7",
+      "bytes": 14146
+    },
+    "scripts/heldout_dmso_cells.py": {
+      "sha256": "9677f666bae3a33bb865091cecc6619d382ff8c756df0d1237be5c75da077a77",
+      "bytes": 30521
+    },
+    "scripts/heldout_embed.py": {
+      "sha256": "35a36a43861e2ec463820e90e35bfc5357bd1b9d02014d54f9e43829463c36ee",
+      "bytes": 21498
+    },
+    "scripts/heldout_fetch_metadata.py": {
+      "sha256": "822b128b47308ff5f25d73e29aad9481f505247c42f1c3791eabdd17d3c8b3ff",
+      "bytes": 2828
+    },
+    "scripts/heldout_fit.py": {
+      "sha256": "71003d8024f12f84cd304a951899798830b4d97eecf4e3a5f72e160e408d6215",
+      "bytes": 23370
+    },
+    "scripts/heldout_grid.py": {
+      "sha256": "d5c8392ed2d2aea11a7b4f7c924e5ad7ce5bbb3b6f57b0dd25573a7df2489183",
+      "bytes": 3699
+    },
+    "scripts/heldout_redraws.py": {
+      "sha256": "fe0fb15eb329e6571544a3870decfaf7d344a7f4b592ddb62b2ec15afc4d8570",
+      "bytes": 13553
+    },
+    "scripts/heldout_smoke_import.py": {
+      "sha256": "16465905064e5339061c428115d2a2e59f511d0252c939bb344e7a32d81c403a",
+      "bytes": 2782
+    },
+    "scripts/strip_ckpt_head.py": {
+      "sha256": "948d8de1d4033a24198fc6ac2bf4be8871db52e727c20f4cb05ef73152d31114",
+      "bytes": 4299
+    },
+    "scripts/verify_rung1.py": {
+      "sha256": "4115261cb829ba7264895392231f8e0de799d23918b2fe9655441993bb00d5c5",
+      "bytes": 69706
+    },
+    "scripts/delta_reproducibility.py": {
+      "sha256": "70959dce8dfea57563ed289febcf4af4fa20df144bc7a184484a22329b6b4c10",
+      "bytes": 102891
+    },
+    "scripts/alpine/ralpine": {
+      "sha256": "00473187646a7b6be077f2de28101428e95b6a6b4d5464dc0e3af734886df267",
+      "bytes": 26170
+    },
+    "scripts/alpine/rung1_env.sh": {
+      "sha256": "4e398d50d42993bb1c8023ab9ccc55fb10e9eef2925d8fa621125b85c4b9e180",
+      "bytes": 2995
+    },
+    "scripts/alpine/rung1_grid.sbatch": {
+      "sha256": "d9dceb9efe2365a695f4042a45152390638efcdd3f5f2b065f3d05122fbb43cd",
+      "bytes": 2640
+    },
+    "scripts/alpine/rung1_answers.sbatch": {
+      "sha256": "fa69df4ae4e4c043c874e450be0574899110c35b256ddd5bddd6c24558c9bfd6",
+      "bytes": 2243
+    },
+    "scripts/alpine/rung1_answers_combine.sbatch": {
+      "sha256": "4c268ac83c179e4d6fc96565fca837817f34ec62f170989db9b792bedc1d9084",
+      "bytes": 1296
+    },
+    "scripts/alpine/rung1_dmso_cells.sbatch": {
+      "sha256": "2bd58365c53743373dbdeefd2758a3b9b54e78c6f7e6ed17ec2f5b9aa3f1d69d",
+      "bytes": 1645
+    },
+    "scripts/alpine/rung1_dmso_combine.sbatch": {
+      "sha256": "7599e53b1e4232933f56e323df0cd5c7758ea9cba11a1c81a98f541272376524",
+      "bytes": 1544
+    },
+    "scripts/alpine/rung1_embed.sbatch": {
+      "sha256": "91ded91327a512d42e980c796cedf1dd2b58dbbff3fb2933c1177af37cf4f33c",
+      "bytes": 1942
+    },
+    "scripts/alpine/rung1_descriptions.sbatch": {
+      "sha256": "ab97acb8915b48cb3090881ffcdc2ba5cba8712bfa7f4f0e430c01aa167a8664",
+      "bytes": 1228
+    },
+    "scripts/alpine/rung1_fit.sbatch": {
+      "sha256": "62108120725a8fcfd48b7528c4638eacb0308f525088ad913f4ae8ed68039723",
+      "bytes": 3473
+    },
+    "scripts/alpine/rung1_redraws.sbatch": {
+      "sha256": "f0faf9bd9d01a3cc07ddd253871ccc38469875b86a11810e59e5e0e387d08053",
+      "bytes": 2186
+    },
+    "scripts/alpine/rung1_combine.sbatch": {
+      "sha256": "949d151e752af5e92c06fd7c7ad6e296e484ce3d25dbe7641c369eb616eb0ee3",
+      "bytes": 2181
+    },
+    "scripts/alpine/submit_rung1_chain.sh": {
+      "sha256": "da90f7da7a92694cc1da79629d4a0b09a877c69f86671fc226e0d14d765d3bb7",
+      "bytes": 7746
+    },
+    "tests/fixtures/tahoe_drug_metadata.csv": {
+      "sha256": "c3a7b0b6ba6a16fe230784cc6023423ce60b57e728f85f8edbb25bacbdae08b5",
+      "bytes": 32223
+    },
+    "tests/test_heldout_declarations.py": {
+      "sha256": "b699c736a1128b29516780f3d97de49e315c72c96b2904bb1ff615ce87c5edbd",
+      "bytes": 1568
+    },
+    "tests/test_heldout_scoring.py": {
+      "sha256": "5f3c6b4c88eb51ca42beed201076493ce421892cd3b5483029edfb9acab19e0f",
+      "bytes": 23176
+    },
+    "tests/test_heldout_models.py": {
+      "sha256": "86aece53121e60961d5283fb11f4ec7585ebe4b0b4c0ea50a38f953d418faf2e",
+      "bytes": 42586
+    },
+    "tests/test_heldout_cells.py": {
+      "sha256": "4137a31141d257ec1c996f87662db6aa5488f9fe2b305a63736d60836b971bc5",
+      "bytes": 31332
+    },
+    "tests/test_heldout_descriptions.py": {
+      "sha256": "b6e39e8a27185abac7e21e8fbeba6aaaa8d285184991e201b13ba68549d30dca",
+      "bytes": 24913
+    },
+    "tests/test_heldout_answers.py": {
+      "sha256": "600a8db9bbe53d361dc794213956b14a719be6bcf94d76d63b74eb19ae630081",
+      "bytes": 17943
+    },
+    "tests/test_heldout_grid.py": {
+      "sha256": "357dfa82443a2d83611e7519c438adfbcd9e30787fa715ace0b27500a31b6977",
+      "bytes": 8852
+    },
+    "tests/test_heldout_pipeline.py": {
+      "sha256": "67dd517c8db248a0fce3efc2b2c116ec53339670ea708f3183301c13d1ad388c",
+      "bytes": 67479
+    },
+    "tests/test_rung1_controls.py": {
+      "sha256": "b7db4e93589f62081d6aef2c0bf80a9b843e115d099e941815cd2a886e0e3866",
+      "bytes": 18672
+    },
+    "tests/test_rung1_jobs.py": {
+      "sha256": "295da52ec879929eb3c7481227a55404aa35179f45ddbc552b8ee853c3249e8b",
+      "bytes": 20175
+    },
+    "tests/test_verify_rung1.py": {
+      "sha256": "87f2a00437290c52ce2abeb1bd1e97c4ea9d177dfdad8fd1b0817906e18ecde4",
+      "bytes": 28297
+    },
+    "results/rung0-assay-reliability/rung0_per_pair_r.csv": {
+      "sha256": "9ad3713d005d0989f7d55c8b6281a2b411c67dd453faa5f3e89e4787902011bf",
+      "bytes": 563037
+    },
+    "results/rung0-assay-reliability/rung0_dose_strata.csv": {
+      "sha256": "d935d2c6ca78560a74be6019c3cb0f753c7c1e4664e3008dcc4beff08b594eb0",
+      "bytes": 1072
+    }
+  },
+  "_absent_when_audited": []
+}
