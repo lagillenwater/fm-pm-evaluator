@@ -110,7 +110,7 @@ def cells(args: argparse.Namespace) -> None:
     adata.write_h5ad(out)
     lib = np.asarray(X.sum(1)).ravel()
     log(f"wrote real_dmso.h5ad: {adata.n_obs} cells, {len(order)} lines, {adata.n_vars} panel genes; library size median "
-        f"{np.median(lib):.0f} (IQR {np.percentile(lib, 25):.0f}-{np.percentile(lib, 75):.0f}); genes detected median {int(np.median((X > 0).sum(1)))}")
+        f"{np.median(lib):.0f} (IQR {np.percentile(lib, 25):.0f}-{np.percentile(lib, 75):.0f}); genes detected median {int(np.median(np.asarray((X > 0).sum(1)).ravel()))}")
 
 
 # ----------------------------------------------------------------------------- embed
