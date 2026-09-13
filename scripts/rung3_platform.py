@@ -238,7 +238,7 @@ def stack(args: argparse.Namespace) -> None:
     assert list(real.var_names) == list(genes)
     shared = np.flatnonzero(genes.get_indexer(genes12k) >= 0)  # Tahoe-table positions of the LINCS genes
     l_pos = genes.get_indexer(genes12k)
-    l_keep = l_pos >= 0
+    l_keep = (l_pos >= 0) & ~pd.Series(genes12k).duplicated().to_numpy()  # a few LINCS ids share a symbol; keep the first
     shared_names = [genes12k[k] for k in np.flatnonzero(l_keep)]
     stack_genes = load_stack_genes(args.genelist)
     log(f"{len(shared_names)} genes shared by the LINCS matrix and the Tahoe table")
