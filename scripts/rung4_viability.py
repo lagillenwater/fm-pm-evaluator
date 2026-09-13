@@ -29,13 +29,19 @@ found by name.
                                 line-specific viability on the response over the drug's DE
                                 genes (the union of the training lines' padj < 0.05 calls,
                                 rung 1's panel), penalty tuned by inner cross-validation on
-                                the training lines
+                                the training lines. No intercept anywhere: the targets are
+                                centred on the training lines, and under leave-one-line-out a
+                                fitted intercept is anti-correlated with the held-out value by
+                                construction (verified on a null synthetic: -0.17 with, ~0
+                                without)
   Score       per drug, Pearson r across the held-out lines between predicted and observed
-              residual; mean over drugs (each drug weighted once), beside the ceiling; a
-              line-shuffled null for every column (the same predictions assigned to the wrong
-              lines). A second table removes each line's mean over its drugs from observed and
-              predicted first (the August lineage's "interaction" score), so a line's general
-              sensitivity cannot carry a column.
+              residual; mean over drugs (each drug weighted once), beside the ceiling. A
+              second table removes each line's mean over its drugs first (the interaction
+              score). The null that matters is a MATCHED one (``--permute-seed``): viability
+              shuffled across lines within each drug and the whole procedure rerun, because
+              leave-one-line-out predictions from a many-feature regression are anti-correlated
+              with the held-out value by construction (-0.15 on a null synthetic).
+              ``rung4_combine.py`` reports observed minus the null mean and an empirical p.
 """
 
 from __future__ import annotations
@@ -142,6 +148,8 @@ def main() -> None:
     ap.add_argument("--genelist", type=Path, default=Path("stack-large/basecount_1000per_15000max.pkl"))
     ap.add_argument("--hallmark-gmt", type=Path, default=Path("data/static/hallmark_signatures.gmt"))
     ap.add_argument("--max-de-genes", type=int, default=3000, help="cap on DE genes per drug given to ridge / lasso (most often called)")
+    ap.add_argument("--permute-seed", type=int, default=None,
+                    help="matched null: shuffle viability across lines within each drug with this seed before everything else")
     ap.add_argument("--out", type=Path, required=True)
     args = ap.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
@@ -152,6 +160,11 @@ def main() -> None:
     keep = [ln for ln in lines if ln not in DROP_LINES]
     paths = fetch(args.prism_dir)
     V, VA, VB, n_rep = prism_block(paths, keep, drugs)
+    if args.permute_seed is not None:
+        prng = np.random.default_rng(args.permute_seed)
+        for c in V.columns:  # line identity destroyed within each drug; the drug's distribution kept
+            V[c] = prng.permutation(V[c].to_numpy())
+        log(f"matched null: viability shuffled across lines within each drug (seed {args.permute_seed})")
     vl = list(V.index)  # lines with viability
     vd = list(V.columns)
     li = [lines.index(ln) for ln in vl]
@@ -235,10 +248,10 @@ def main() -> None:
             if k not in z or not np.isfinite(z[k][i]).all():
                 continue
             ok = train[np.isfinite(z[k][train]).all(1)]
-            X = np.column_stack([np.ones(len(ok)), z[k][ok]])
+            X = z[k][ok] - z[k][ok].mean(0)  # centred on the training lines, no intercept (see above)
             R_ = np.nan_to_num(resid_tr[[np.where(train == o)[0][0] for o in ok]])
             beta = np.linalg.pinv(X) @ R_
-            preds[name][i] = np.concatenate([[1.0], z[k][i]]) @ beta
+            preds[name][i] = (z[k][i] - z[k][ok].mean(0)) @ beta
         for name, S in proliferation.items():
             with np.errstate(invalid="ignore"):
                 preds[name][i] = S[i] - np.nanmean(S[train], axis=0)
@@ -256,9 +269,11 @@ def main() -> None:
             yj = Vn[ok, j] - dmean[j]
             for src, Zr in resp_z.items():
                 Xtr, Xte = Zr[ok, j][:, de], Zr[i, j][de][None, :]
-                preds[f"ridge_de_{src}"][i, j] = RidgeCV(alphas=alphas_ridge).fit(Xtr, yj).predict(Xte)[0]
+                # no intercept: the target is centred on the training lines, and a fitted intercept under
+                # leave-one-out is anti-correlated with the held-out value by construction
+                preds[f"ridge_de_{src}"][i, j] = RidgeCV(alphas=alphas_ridge, fit_intercept=False).fit(Xtr, yj).predict(Xte)[0]
                 try:
-                    preds[f"lasso_de_{src}"][i, j] = LassoCV(cv=3, alphas=alphas_lasso, max_iter=3000, random_state=SEED).fit(Xtr, yj).predict(Xte)[0]
+                    preds[f"lasso_de_{src}"][i, j] = LassoCV(cv=3, alphas=alphas_lasso, max_iter=3000, random_state=SEED, fit_intercept=False).fit(Xtr, yj).predict(Xte)[0]
                 except Exception:  # noqa: BLE001 -- a degenerate fold leaves the cell empty
                     pass
         log(f"fold {i + 1}/{n_l} {vl[i]}")
