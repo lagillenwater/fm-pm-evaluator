@@ -28,8 +28,9 @@ INTO VIABILITY:
                     checkpoint (proliferation programme down -> killing up); no fitting
     ridge, lasso    per drug, L2 / L1 regression of the line-specific viability on the predicted
                     response over the drug's DE genes (union of the training lines' padj < 0.05
-                    calls, capped at the 3,000 most often called), penalty tuned by inner
-                    cross-validation, no intercept (targets centred on the training lines)
+                    calls, capped at the 3,000 most often called), genes standardised on the
+                    training lines, one fit at a fixed penalty (ridge 1; lasso one tenth of the
+                    fit's alpha_max), no tuning, no intercept (targets centred on the training lines)
 
   Target      V[line, drug] minus the drug's mean over the training lines (line-specific part).
   Scores      overall: per drug, Pearson r across the held-out lines, mean over drugs.
@@ -47,7 +48,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import subprocess
 import sys
@@ -68,7 +68,8 @@ DROP_LINES = ("NA", "ACH-000628", "ACH-000311")
 K_NEIGHBOURS = 5
 SEED = 0
 MIN_LINES = 8
-N_JOBS = int(os.environ.get("SLURM_CPUS_PER_TASK", "1"))  # LassoCV parallelism over its folds and alphas
+RIDGE_ALPHA = 1.0  # fixed penalty on training-standardised genes; no tuning
+LASSO_FRACTION = 0.1  # lasso penalty as a fraction of each fit's alpha_max; no tuning
 ROWS = ("mean", "knn", "pca", "nmf", "stack_base", "stack_cytokine", "stack_sciplex", "measured")
 READOUTS = ("proliferation", "ridge", "lasso")
 
@@ -258,9 +259,8 @@ def main() -> None:
     resp_z = {r: zscore_profiles(arr) for r, arr in resp.items()}
     prolif = {r: -Zr[:, :, prolif_idx].mean(2) for r, Zr in resp_z.items()}
 
-    from sklearn.linear_model import LassoCV, RidgeCV
+    from sklearn.linear_model import Lasso, Ridge
 
-    alphas_ridge, alphas_lasso = np.logspace(-2, 5, 15), np.logspace(0, -2, 15)  # lasso: fractions of alpha_max
     Vn = V.to_numpy(dtype=float)
     preds = {(ro, r): np.full((n_l, n_d), np.nan) for ro in READOUTS for r in rows_present}
     obs = np.full((n_l, n_d), np.nan)
@@ -297,13 +297,13 @@ def main() -> None:
                 # (a row's departures vary far less across lines than the drug means do across drugs)
                 mu_, sd_ = Xtr.mean(0), np.where(sd_ > 0, sd_, 1.0)
                 Xtr, Xte = (Xtr - mu_) / sd_, (Xte - mu_) / sd_
-                preds[("ridge", r)][i, j] = RidgeCV(alphas=alphas_ridge, fit_intercept=False).fit(Xtr, yj).predict(Xte)[0]
+                preds[("ridge", r)][i, j] = Ridge(alpha=RIDGE_ALPHA, fit_intercept=False).fit(Xtr, yj).predict(Xte)[0]
                 try:
-                    # the lasso path from the fit's own alpha_max (the smallest penalty that zeroes every gene)
-                    # down two decades: below that, with 3,000 genes and ~36 lines, the fit saturates
+                    # one lasso fit, no tuning: penalty = a fixed fraction of the fit's own alpha_max
+                    # (the smallest penalty that zeroes every gene; a fixed absolute penalty would zero
+                    # every gene at this viability scale)
                     a_max = np.abs(Xtr.T @ yj).max() / len(yj)
-                    preds[("lasso", r)][i, j] = LassoCV(cv=3, alphas=a_max * alphas_lasso, max_iter=3000, random_state=SEED, fit_intercept=False,
-                                                        n_jobs=N_JOBS).fit(Xtr, yj).predict(Xte)[0]
+                    preds[("lasso", r)][i, j] = Lasso(alpha=LASSO_FRACTION * a_max, max_iter=3000, fit_intercept=False).fit(Xtr, yj).predict(Xte)[0]
                 except Exception:  # noqa: BLE001
                     pass
         log(f"fold {i + 1}/{n_l} {vl[i]}")
