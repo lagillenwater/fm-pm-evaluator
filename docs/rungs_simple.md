@@ -63,19 +63,33 @@ fit at a fixed penalty -- ridge 1, lasso a tenth of alpha_max -- no tuning). Eve
 block-wide drug mean, so the mean row is a per-drug constant: its proliferation residual is 0 and ridge /
 lasso have nothing to fit (blank). Columns: overall r, its p, interaction r (each line's mean removed), its
 p, and each minus the null mean.
+Stack-base row: the base encoder's embedding of the line's real DMSO cells (all 1,600 dimensions) mapped into
+gene by line space by a ridge from the centred embedding to the training lines' response departures (one fixed
+penalty, the mean squared embedding norm; the base checkpoint has no decoder, so this map is ours, leave-line-out);
+the predicted departure is a similarity-weighted combination of the other lines' measured departures, gene for gene.
 Results (observed minus null / p), 37 lines x 69 drugs, ceiling 0.235 overall / 0.262 interaction:
   proliferation  measured +0.028 / 0.09 (interaction +0.030 / 0.09); stack_cytokine +0.022 / 0.09 (+0.015 /
-                 0.45); pca +0.018 / 0.27; knn, stack_base, stack_sciplex ~0; nmf -0.04.
+                 0.45); pca +0.018 / 0.27; knn ~0; stack_base -0.021 / 0.82 (+0.007 / 0.27); stack_sciplex ~0;
+                 nmf -0.04.
   ridge          measured +0.066 / 0.09 (+0.083 / 0.09); stack_cytokine +0.069 / 0.09 (+0.087 / 0.09);
-                 stack_sciplex +0.057 / 0.18 (+0.072 / 0.09); stack_base +0.035 / 0.09 (+0.052 / 0.09);
-                 pca +0.024 / 0.36, nmf +0.024 / 0.18 (+0.036 / 0.09); knn -0.01.
-  lasso          measured +0.087 / 0.09 (+0.089 / 0.09); stack_base +0.032 / 0.27 (+0.045 / 0.18);
-                 stack_cytokine +0.028 / 0.18; pca +0.024 / 0.36; nmf +0.022 / 0.27 (+0.029 / 0.09);
+                 stack_sciplex +0.057 / 0.18 (+0.072 / 0.09); pca +0.024 / 0.36, nmf +0.024 / 0.18 (+0.036 /
+                 0.09); knn -0.01; stack_base -0.031 / 0.91 (-0.026 / 0.82).
+  lasso          measured +0.085 / 0.09 (+0.088 / 0.09); stack_base +0.021 / 0.09 (+0.040 / 0.09);
+                 stack_cytokine +0.029 / 0.18; pca +0.025 / 0.36; nmf +0.022 / 0.27 (+0.028 / 0.09);
                  stack_sciplex ~0; knn -0.02.
+Null sign depends on the row. Under the ridge readout the null mean is -0.02 to -0.03 for the measured and
+generated rows (the leave-one-out anti-correlation) but +0.02 for knn and +0.066 (SD 0.03 over 10 perms) for
+stack_base. Mechanism: the readout's targets are centred on the training lines, so each carries +V_i/(n-1) of
+the held-out line's own viability; the sign of the resulting bias follows the sign of the summed similarity
+between the held-out line's features and the training lines' features, negative for rows whose features are
+their own (measured, generated), positive for rows whose features are similarity-weighted combinations of the
+other lines' measured departures (knn, stack_base). The matched null removes it either way; it is why the
+observed values are not read on their own.
 Reading: the measured response carries a small line-specific signal into viability (0.03 through the
 proliferation programme, 0.07-0.09 through a regression on its DE genes; 30-35% of the split-half ceiling).
 Of the predicted responses, only Stack's generated ones reach it under ridge (cytokine +0.07, sci-plex
-+0.06, base embedding +0.04; all at the p floor), and none under the proliferation readout; PCA, NMF and kNN
-departures add 0.02 or less. Ten permutations floor p at 0.09. (`scripts/rung4_viability.py`,
++0.06; at the p floor), and none under the proliferation readout; PCA, NMF and kNN departures add 0.02 or
+less; the Stack-base row is inconsistent across readouts (-0.03 ridge, +0.02 lasso, ~0 proliferation) and
+carries nothing reliable. Ten permutations floor p at 0.09. (`scripts/rung4_viability.py`,
 `scripts/rung4_combine.py`; results on scratch `rung4_viability/results` + `perm_1..10`, worktree
-`results/rung4-viability/v4/`.)
+`results/rung4-viability/v5/`.)
