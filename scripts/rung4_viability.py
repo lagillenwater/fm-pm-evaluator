@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -67,6 +68,7 @@ DROP_LINES = ("NA", "ACH-000628", "ACH-000311")
 K_NEIGHBOURS = 5
 SEED = 0
 MIN_LINES = 8
+N_JOBS = int(os.environ.get("SLURM_CPUS_PER_TASK", "1"))  # LassoCV parallelism over its folds and alphas
 ROWS = ("mean", "knn", "pca", "nmf", "stack_base", "stack_cytokine", "stack_sciplex", "measured")
 READOUTS = ("proliferation", "ridge", "lasso")
 
@@ -258,7 +260,7 @@ def main() -> None:
 
     from sklearn.linear_model import LassoCV, RidgeCV
 
-    alphas_ridge, alphas_lasso = np.logspace(-2, 5, 15), np.logspace(-3, 1, 15)
+    alphas_ridge, alphas_lasso = np.logspace(-2, 5, 15), np.logspace(0, -2, 15)  # lasso: fractions of alpha_max
     Vn = V.to_numpy(dtype=float)
     preds = {(ro, r): np.full((n_l, n_d), np.nan) for ro in READOUTS for r in rows_present}
     obs = np.full((n_l, n_d), np.nan)
@@ -288,11 +290,20 @@ def main() -> None:
             for r in rows_present:
                 Zr = resp_z[r]
                 Xtr, Xte = Zr[ok, j][:, de], Zr[i, j][de][None, :]
-                if Xtr.std(0).max() < 1e-4:  # z-scored features; float32 rounding leaves ~1e-7
+                sd_ = Xtr.std(0)
+                if sd_.max() < 1e-4:  # z-scored features; float32 rounding leaves ~1e-7
                     continue  # the mean row: identical features for every line, nothing to fit
+                # standardise each gene on the training lines so the penalty grids are on a fixed scale
+                # (a row's departures vary far less across lines than the drug means do across drugs)
+                mu_, sd_ = Xtr.mean(0), np.where(sd_ > 0, sd_, 1.0)
+                Xtr, Xte = (Xtr - mu_) / sd_, (Xte - mu_) / sd_
                 preds[("ridge", r)][i, j] = RidgeCV(alphas=alphas_ridge, fit_intercept=False).fit(Xtr, yj).predict(Xte)[0]
                 try:
-                    preds[("lasso", r)][i, j] = LassoCV(cv=3, alphas=alphas_lasso, max_iter=3000, random_state=SEED, fit_intercept=False).fit(Xtr, yj).predict(Xte)[0]
+                    # the lasso path from the fit's own alpha_max (the smallest penalty that zeroes every gene)
+                    # down two decades: below that, with 3,000 genes and ~36 lines, the fit saturates
+                    a_max = np.abs(Xtr.T @ yj).max() / len(yj)
+                    preds[("lasso", r)][i, j] = LassoCV(cv=3, alphas=a_max * alphas_lasso, max_iter=3000, random_state=SEED, fit_intercept=False,
+                                                        n_jobs=N_JOBS).fit(Xtr, yj).predict(Xte)[0]
                 except Exception:  # noqa: BLE001
                     pass
         log(f"fold {i + 1}/{n_l} {vl[i]}")
