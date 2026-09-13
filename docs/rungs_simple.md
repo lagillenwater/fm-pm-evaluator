@@ -48,13 +48,22 @@ Scripts: `scripts/rung1_simple_tables.py`, `scripts/tahoe_real_cells.py`, `scrip
 PRISM Repurposing 19Q4 primary screen (public; viability log fold change at 2.5 uM, 5 days): 37 Tahoe
 lines x 69 of the 108 drugs, 2,553 pairs, median 3 replicates. Target = the line-specific part (V minus the
 drug mean over training lines); ceiling = replicate split-half of that quantity, per drug across lines:
-mean 0.235, median 0.18, above 0.4 for 21 drugs, below 0 for 20 -- the line-specific killing is itself
-only weakly reproducible in a single-dose screen. Attainable bound (sqrt of Spearman-Brown) 0.49.
-Per-drug r across held-out lines, mean over 69 drugs (line-shuffled null in brackets): pca_adj 0.058 (-0.04),
-stack_base 0.036 (0.06), knn 0.029 (0.01), nmf_adj 0.024 (0.05), tahoe_prolif 0.017 (-0.02), tahoe_n_de
--0.006, stack_gen_prolif cytokine 0.026 / sciplex 0.014 (0.01 / 0.02). SE across drugs ~0.02. On the 21
-drugs with reproducible line-specific killing: stack_base 0.14, knn 0.10, pca_adj 0.10, the response
-summaries 0.04-0.05. The drug mean alone correlates 0.83 with viability globally. No predictor -- baseline
-representation, measured transcriptional response, or Stack's generated response -- recovers a usable part
-of the line-specific killing; the best is ~0.1 of the attainable bound. (`scripts/rung4_viability.py`;
-results on scratch `rung4_viability/results`, worktree `results/rung4-viability/`.)
+mean 0.235 (0.26 with each line's mean removed), above 0.4 for 21 drugs -- line-specific killing is itself
+only weakly reproducible in a single-dose screen; attainable bound ~0.49. The drug mean alone correlates
+0.83 with viability globally.
+Leave-one-line-out predictions from a many-feature regression are anti-correlated with the held-out value
+by construction (-0.15 on a null synthetic), so every column is read against a MATCHED null: viability
+shuffled across lines within each drug and the whole procedure rerun 10 times (`--permute-seed`). Observed
+minus null mean (per-drug r; p = fraction of permutations at or above, floor 1/11): pca_adj +0.060 (p 0.09),
+knn +0.057 (0.09), stack_base (base encoder, real DMSO cells) +0.055 (0.09), proliferation_tahoe (Hallmark
+E2F + G2-M on the measured response) +0.028 (0.09), proliferation_gen_cytokine +0.022 (0.09),
+proliferation_gen_sciplex 0.00; ridge_de_tahoe +0.051 (0.09), lasso_de_tahoe +0.047 (0.09), ridge_de_gen
+cytokine +0.071 (0.18) / sciplex +0.053 (0.18), lasso_de_gen ~0. With the line mean removed (interaction):
+stack_base +0.061, pca_adj +0.045, proliferation_tahoe +0.030 (all p 0.09), knn +0.05 and ridge_de_gen
++0.07-0.08 (p 0.18), lasso columns 0.
+Reading: a small, consistent line-specific signal (0.05-0.07 of correlation, 20-30% of the split-half
+ceiling, ~10% of the attainable bound) is carried by baseline expression, by the base Stack embedding and by
+the measured proliferation response; Stack's generated response carries a trace through its proliferation
+readout and the DE-gene ridge. Ten permutations floor p at 0.09; a 100-permutation run would settle
+significance. (`scripts/rung4_viability.py`, `scripts/rung4_combine.py`; results on scratch
+`rung4_viability/results` + `perm_1..10`, worktree `results/rung4-viability/v3/`.)
