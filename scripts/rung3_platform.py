@@ -178,6 +178,11 @@ def level3(args: argparse.Namespace) -> None:
 
     # plate-matched log2 fold change per treated instance, then per (line, drug); baseline per line
     ctl_plate_mean = pd.DataFrame(C).groupby(ctl[plate_c].to_numpy()).mean()
+    has_vehicle = trt[plate_c].isin(ctl_plate_mean.index).to_numpy()
+    if (~has_vehicle).any():
+        log(f"{int((~has_vehicle).sum())} treated instances on {trt.loc[~has_vehicle, plate_c].nunique()} plates with no vehicle "
+            f"rows in the control matrix are dropped")
+        trt, T = trt[has_vehicle].reset_index(drop=True), T[has_vehicle]
     lfc_inst = T - ctl_plate_mean.loc[trt[plate_c].to_numpy()].to_numpy()
     cells = sorted(trt[cell_c].astype(str).unique())
     l_drugs = sorted(trt["drug"].unique())
