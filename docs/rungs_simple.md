@@ -52,18 +52,30 @@ mean 0.235 (0.26 with each line's mean removed), above 0.4 for 21 drugs -- line-
 only weakly reproducible in a single-dose screen; attainable bound ~0.49. The drug mean alone correlates
 0.83 with viability globally.
 Leave-one-line-out predictions from a many-feature regression are anti-correlated with the held-out value
-by construction (-0.15 on a null synthetic), so every column is read against a MATCHED null: viability
-shuffled across lines within each drug and the whole procedure rerun 10 times (`--permute-seed`). Observed
-minus null mean (per-drug r; p = fraction of permutations at or above, floor 1/11): pca_adj +0.060 (p 0.09),
-knn +0.057 (0.09), stack_base (base encoder, real DMSO cells) +0.055 (0.09), proliferation_tahoe (Hallmark
-E2F + G2-M on the measured response) +0.028 (0.09), proliferation_gen_cytokine +0.022 (0.09),
-proliferation_gen_sciplex 0.00; ridge_de_tahoe +0.051 (0.09), lasso_de_tahoe +0.047 (0.09), ridge_de_gen
-cytokine +0.071 (0.18) / sciplex +0.053 (0.18), lasso_de_gen ~0. With the line mean removed (interaction):
-stack_base +0.061, pca_adj +0.045, proliferation_tahoe +0.030 (all p 0.09), knn +0.05 and ridge_de_gen
-+0.07-0.08 (p 0.18), lasso columns 0.
-Reading: a small, consistent line-specific signal (0.05-0.07 of correlation, 20-30% of the split-half
-ceiling, ~10% of the attainable bound) is carried by baseline expression, by the base Stack embedding and by
-the measured proliferation response; Stack's generated response carries a trace through its proliferation
-readout and the DE-gene ridge. Ten permutations floor p at 0.09; a 100-permutation run would settle
-significance. (`scripts/rung4_viability.py`, `scripts/rung4_combine.py`; results on scratch
-`rung4_viability/results` + `perm_1..10`, worktree `results/rung4-viability/v3/`.)
+by construction (-0.15 on a null synthetic), so every entry is read against a MATCHED null: viability
+shuffled across lines within each drug and the whole procedure rerun 10 times (`--permute-seed`; p = fraction
+of permutations at or above, floor 1/11 = 0.09).
+Layout: rows = what predicted the held-out line's expression response in rung 1 (mean, kNN, PCA, NMF,
+Stack-base, Stack-cytokine, Stack-sci-plex) plus the measured response; one table per readout that turns a
+response into a viability prediction: proliferation (minus the mean z over Hallmark E2F + G2-M, no fitting),
+ridge and lasso (per drug over the training lines' DE genes, genes standardised on the training lines, one
+fit at a fixed penalty -- ridge 1, lasso a tenth of alpha_max -- no tuning). Every row's additive base is the
+block-wide drug mean, so the mean row is a per-drug constant: its proliferation residual is 0 and ridge /
+lasso have nothing to fit (blank). Columns: overall r, its p, interaction r (each line's mean removed), its
+p, and each minus the null mean.
+Results (observed minus null / p), 37 lines x 69 drugs, ceiling 0.235 overall / 0.262 interaction:
+  proliferation  measured +0.028 / 0.09 (interaction +0.030 / 0.09); stack_cytokine +0.022 / 0.09 (+0.015 /
+                 0.45); pca +0.018 / 0.27; knn, stack_base, stack_sciplex ~0; nmf -0.04.
+  ridge          measured +0.066 / 0.09 (+0.083 / 0.09); stack_cytokine +0.069 / 0.09 (+0.087 / 0.09);
+                 stack_sciplex +0.057 / 0.18 (+0.072 / 0.09); stack_base +0.035 / 0.09 (+0.052 / 0.09);
+                 pca +0.024 / 0.36, nmf +0.024 / 0.18 (+0.036 / 0.09); knn -0.01.
+  lasso          measured +0.087 / 0.09 (+0.089 / 0.09); stack_base +0.032 / 0.27 (+0.045 / 0.18);
+                 stack_cytokine +0.028 / 0.18; pca +0.024 / 0.36; nmf +0.022 / 0.27 (+0.029 / 0.09);
+                 stack_sciplex ~0; knn -0.02.
+Reading: the measured response carries a small line-specific signal into viability (0.03 through the
+proliferation programme, 0.07-0.09 through a regression on its DE genes; 30-35% of the split-half ceiling).
+Of the predicted responses, only Stack's generated ones reach it under ridge (cytokine +0.07, sci-plex
++0.06, base embedding +0.04; all at the p floor), and none under the proliferation readout; PCA, NMF and kNN
+departures add 0.02 or less. Ten permutations floor p at 0.09. (`scripts/rung4_viability.py`,
+`scripts/rung4_combine.py`; results on scratch `rung4_viability/results` + `perm_1..10`, worktree
+`results/rung4-viability/v4/`.)
