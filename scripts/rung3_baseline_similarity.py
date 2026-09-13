@@ -96,6 +96,48 @@ def main() -> None:
         }
     per = pd.DataFrame(rows).round(4)
     per.to_csv(args.out / "rung3_baseline_similarity_per_line.csv", index=False)
+
+    # --- the response itself: same line, same drug, both platforms -- the expected-transfer ceiling
+    Y, D, H0, H1 = t["Y"], t["D"], t["H0"], t["H1"]
+    drugs = [str(x) for x in t["drugs"]]
+    R, l_drugs = l1["R"], [str(x) for x in l1["drugs"]]
+    in_lm = np.zeros(len(genes), dtype=bool)
+    in_lm[lm_t] = True
+    rng = np.random.default_rng(0)
+    resp = []
+    for ln, ci in matched.items():
+        i = lines.index(ln)
+        others_t = [k for k, l2 in enumerate(lines) if keep[k] and l2 != ln]
+        for jl, d in enumerate(l_drugs):
+            if d not in drugs or not np.isfinite(R[ci, jl]).any():
+                continue
+            j = drugs.index(d)
+            panel = D[i, j] & in_lm
+            if panel.sum() < 10:
+                continue
+            y = Y[i, j][panel]
+            same = np.full(len(genes), np.nan); same[lm_t] = R[ci, jl][ok]
+            lincs_others = np.delete(R[:, jl, :], ci, axis=0)
+            with np.errstate(invalid="ignore"):
+                lmean = np.full(len(genes), np.nan); lmean[lm_t] = np.nanmean(lincs_others, axis=0)[ok]
+                tmean = np.nanmean(Y[others_t, j], axis=0)
+                jshuf = rng.choice([k for k in range(len(l_drugs)) if k != jl])
+                shuf = np.full(len(genes), np.nan); shuf[lm_t] = R[ci, jshuf][ok]
+            def r_(p):
+                m = np.isfinite(p[panel]) & np.isfinite(y)
+                return float(np.corrcoef(p[panel][m], y[m])[0, 1]) if m.sum() >= 10 else np.nan
+            resp.append({"line": ln, "name": name[ln], "drug": d, "n_panel": int(panel.sum()),
+                         "r_split_half": r_(H0[i, j]) if False else float(np.corrcoef(H0[i, j][panel], H1[i, j][panel])[0, 1]),
+                         "r_same_line_lincs": r_(same), "r_same_line_lincs_wrong_drug": r_(shuf),
+                         "r_lincs_mean_other_lines": r_(lmean), "r_tahoe_mean_other_lines": r_(tmean)})
+    rp = pd.DataFrame(resp).round(4)
+    rp.to_csv(args.out / "rung3_same_line_same_drug_response.csv", index=False)
+    rs = rp.drop(columns=["line", "name", "drug"]).agg(["mean", "median", "count"]).round(4)
+    rs.to_csv(args.out / "rung3_same_line_same_drug_summary.csv")
+    print("\n=== same line, same drug, both platforms ===")
+    print(rs.to_string())
+    print("pairs:", len(rp), "| lines:", rp.line.nunique(), "| drugs:", rp.drug.nunique(),
+          "| same-line LINCS beats wrong-drug in %.2f of pairs" % (rp.r_same_line_lincs > rp.r_same_line_lincs_wrong_drug).mean())
     summ = pd.DataFrame(summaries).round(4)
     summ.to_csv(args.out / "rung3_baseline_similarity_summary.csv")
     print(per.to_string(index=False))
