@@ -26,6 +26,9 @@ Columns (cross-platform, fit on LINCS -> applied to the Tahoe line):
   l1000_nmf_adj    baseline -> LINCS treated; the Tahoe baseline mapped into LINCS units
                    gene-wise, encoded, its departure decoded and added to l1000_mean
   l1000_shuffled   another drug's l1000_mean (fixed derangement): the null
+  tahoe_shuffled   another drug's tahoe_mean (same derangement): how much of the within-platform
+                   reference is a response every drug provokes on this screen rather than
+                   the drug's own effect
   stack_l1000ctx   Stack in-context generation on the pure LINCS set: prompt = 128 L1000
   (+ _adj)         control pseudo-cells, context = 256 L1000 treated pseudo-cells of the drug,
                    query = 128 real Tahoe DMSO cells of the held-out line. Pseudo-cells:
@@ -419,7 +422,7 @@ def score(args: argparse.Namespace) -> None:
                 l_knn = np.nanmean(R[cell_rows[nbr], jl][:, lm_ok], axis=0)
                 l_shuf = np.nanmean(R[cell_rows[rows_ok], l_pos[drugs[d_idx[perm[k_d]]]]][:, lm_ok], axis=0)
             preds = {
-                "tahoe_mean": tahoe_mean[j_t], "tahoe_knn": tahoe_knn[j_t],
+                "tahoe_mean": tahoe_mean[j_t], "tahoe_shuffled": tahoe_mean[d_idx[perm[k_d]]], "tahoe_knn": tahoe_knn[j_t],
                 "tahoe_pca_adj": tahoe_mean[j_t] + tahoe_dep["pca"][j_t], "tahoe_nmf_adj": tahoe_mean[j_t] + tahoe_dep["nmf"][j_t],
                 "l1000_mean": to_full(l_mean), "l1000_knn": to_full(l_knn),
                 "l1000_pca_adj": to_full(l_mean + lin_dep["pca"][jl]), "l1000_nmf_adj": to_full(l_mean + lin_dep["nmf"][jl]),
@@ -463,7 +466,7 @@ def score(args: argparse.Namespace) -> None:
     attainable = np.sqrt(2 * split_half / (1 + split_half))
     summary["attainable_bound"] = attainable
     summary["frac_attainable"] = summary["mean"] / attainable
-    order = [CEILING] + [m for m in ("tahoe_mean", "l1000_mean", "l1000_shuffled", "tahoe_knn", "l1000_knn", "tahoe_pca_adj", "l1000_pca_adj",
+    order = [CEILING] + [m for m in ("tahoe_mean", "tahoe_shuffled", "l1000_mean", "l1000_shuffled", "tahoe_knn", "l1000_knn", "tahoe_pca_adj", "l1000_pca_adj",
                                      "tahoe_nmf_adj", "l1000_nmf_adj") if m in summary.index]
     order += [m for m in models if m not in order]
     summary = summary.reindex(order)
@@ -471,6 +474,10 @@ def score(args: argparse.Namespace) -> None:
         summary.loc[f"retained_{name}", "mean"] = summary.loc[x, "mean"] / summary.loc[w, "mean"]
     wide_c = per.pivot_table(index=["line", "drug"], columns="model", values="r")
     summary.loc["l1000_mean_beats_shuffled_fraction", "mean"] = float((wide_c["l1000_mean"] > wide_c["l1000_shuffled"]).mean())
+    summary.loc["tahoe_mean_beats_shuffled_fraction", "mean"] = float((wide_c["tahoe_mean"] > wide_c["tahoe_shuffled"]).mean())
+    # drug-specific transfer: what crosses above the wrong-drug floor on each platform
+    summary.loc["retained_mean_above_shuffled", "mean"] = ((summary.loc["l1000_mean", "mean"] - summary.loc["l1000_shuffled", "mean"])
+                                                           / (summary.loc["tahoe_mean", "mean"] - summary.loc["tahoe_shuffled", "mean"]))
     summary.round(4).to_csv(args.out / "rung3_summary.csv")
     log("summary:\n" + summary.round(4).to_string())
 
