@@ -43,3 +43,18 @@ drugs; PANACEA DREAM release: 11 lines, 32 concealed compounds).
 Scripts: `scripts/rung1_simple_tables.py`, `scripts/tahoe_real_cells.py`, `scripts/rung2_bridge.py`,
 `scripts/rung3_platform.py`, `scripts/rung3_baseline_similarity.py`; jobs under `scripts/alpine/`.
 `docs/STATE.md` and `README.md` are not updated by this note.
+
+## Rung 4 -- does the representation predict how much a drug kills a line?
+PRISM Repurposing 19Q4 primary screen (public; viability log fold change at 2.5 uM, 5 days): 37 Tahoe
+lines x 69 of the 108 drugs, 2,553 pairs, median 3 replicates. Target = the line-specific part (V minus the
+drug mean over training lines); ceiling = replicate split-half of that quantity, per drug across lines:
+mean 0.235, median 0.18, above 0.4 for 21 drugs, below 0 for 20 -- the line-specific killing is itself
+only weakly reproducible in a single-dose screen. Attainable bound (sqrt of Spearman-Brown) 0.49.
+Per-drug r across held-out lines, mean over 69 drugs (line-shuffled null in brackets): pca_adj 0.058 (-0.04),
+stack_base 0.036 (0.06), knn 0.029 (0.01), nmf_adj 0.024 (0.05), tahoe_prolif 0.017 (-0.02), tahoe_n_de
+-0.006, stack_gen_prolif cytokine 0.026 / sciplex 0.014 (0.01 / 0.02). SE across drugs ~0.02. On the 21
+drugs with reproducible line-specific killing: stack_base 0.14, knn 0.10, pca_adj 0.10, the response
+summaries 0.04-0.05. The drug mean alone correlates 0.83 with viability globally. No predictor -- baseline
+representation, measured transcriptional response, or Stack's generated response -- recovers a usable part
+of the line-specific killing; the best is ~0.1 of the attainable bound. (`scripts/rung4_viability.py`;
+results on scratch `rung4_viability/results`, worktree `results/rung4-viability/`.)
