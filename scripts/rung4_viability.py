@@ -27,10 +27,25 @@ found by name.
               generation arrays: prompt/context/query all real cells):
                 stack_gen_prolif_<ckpt>  the same proliferation summary on the predicted
                                 log2FC -- the model's own cross-modality prediction
+              The August lineage's readouts and models, carried over (Check 2):
+                hallmark_<src>  the fixed signature readout: z-score each gene across the
+                                response profiles, signed mean over four MSigDB Hallmark sets
+                                (p53 pathway and apoptosis +1, E2F targets and G2-M checkpoint
+                                -1), averaged; src = tahoe (measured) or gen_<ckpt> (Stack)
+                szalai_<src>    the supervised L2 readout (Szalai et al., NAR 2019): ridge from
+                                the z-scored response profile to the line-specific viability,
+                                fit on the training lines' (line, drug) pairs, applied to the
+                                held-out line's
+                ridge_expr, lasso_expr, ridge_stack, lasso_stack  per-drug L2 / L1 regressions
+                                of the line-specific viability on the full representation
+                                (standardised baseline expression; the 1,600-d Stack embedding),
+                                penalty chosen by inner cross-validation on the training lines
   Score       per drug, Pearson r across the held-out lines between predicted and observed
               residual; mean over drugs (each drug weighted once), beside the ceiling; a
               line-shuffled null for every column (the same predictions assigned to the wrong
-              lines).
+              lines). A second table removes each line's mean over its drugs from observed and
+              predicted first (the August lineage's "interaction" score), so a line's general
+              sensitivity cannot carry a column.
 """
 
 from __future__ import annotations
@@ -137,6 +152,8 @@ def main() -> None:
     ap.add_argument("--prism-dir", type=Path, required=True)
     ap.add_argument("--gen-dir", type=Path, default=None, help="rung 1 cache with real-cell gen_stack_*.npy")
     ap.add_argument("--genelist", type=Path, default=Path("stack-large/basecount_1000per_15000max.pkl"))
+    ap.add_argument("--hallmark-gmt", type=Path, default=Path("data/static/hallmark_signatures.gmt"))
+    ap.add_argument("--n-lasso-genes", type=int, default=2000, help="most variable baseline genes given to the lasso")
     ap.add_argument("--out", type=Path, required=True)
     args = ap.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
@@ -196,9 +213,60 @@ def main() -> None:
                         gen_prolif[f"stack_gen_prolif_{ck.split('_')[1]}"] = -np.nanmean(G[:, :, sp], axis=2)
             log(f"Stack generated responses: {sorted(gen_prolif)} over {len(sp)} proliferation genes in Stack's list")
 
+    # --- response profiles over Stack's gene list (the space the generated arrays live in)
+    from rung1_simple_tables import load_stack_genes as _lsg
+
+    stack_genes = _lsg(args.genelist) or []
+    sg_in = genes.get_indexer(stack_genes)
+    resp_genes = [g for g, k in zip(stack_genes, sg_in) if k >= 0]
+    responses = {"tahoe": Y[np.ix_(li, dj)][:, :, sg_in[sg_in >= 0]]}
+    if args.gen_dir is not None:
+        for ck in ("stack_cytokine", "stack_sciplex"):
+            p_ = args.gen_dir / f"gen_{ck}.npy"
+            if p_.exists():
+                responses[f"gen_{ck.split('_')[1]}"] = np.load(p_)[np.ix_(li, dj)][:, :, sg_in >= 0]
+    hallmark = {}
+    if args.hallmark_gmt.exists():
+        direction = {"HALLMARK_P53_PATHWAY": 1, "HALLMARK_APOPTOSIS": 1, "HALLMARK_E2F_TARGETS": -1, "HALLMARK_G2M_CHECKPOINT": -1}
+        gpos = {g: k for k, g in enumerate(resp_genes)}
+        for line_ in args.hallmark_gmt.read_text().splitlines():
+            parts = line_.split("\t")
+            if parts[0] in direction:
+                hallmark[parts[0]] = (direction[parts[0]], np.array([gpos[g] for g in parts[2:] if g in gpos]))
+        log(f"Hallmark sets over the response genes: { {k: len(v[1]) for k, v in hallmark.items()} }")
+
+    def zscore_profiles(Rz: np.ndarray) -> np.ndarray:
+        flat = Rz.reshape(-1, Rz.shape[-1])
+        mu, sd = np.nanmean(flat, axis=0), np.nanstd(flat, axis=0)
+        return np.nan_to_num((Rz - mu) / np.where(sd > 0, sd, 1.0), nan=0.0)
+
+    readout_hallmark, resp_z = {}, {}
+    for src, Rr in responses.items():
+        Zr = zscore_profiles(Rr)
+        resp_z[src] = Zr
+        if hallmark:
+            readout_hallmark[f"hallmark_{src}"] = np.mean([d * Zr[:, :, idx].mean(2) for d, idx in hallmark.values()], axis=0)
+
+    # --- full representations for the L1 / L2 per-drug models
+    from sklearn.linear_model import LassoCV, RidgeCV
+
+    X_expr = Z  # standardised log CPM, all genes with variance
+    top = np.argsort(-L[:, keep_g].var(0))[: args.n_lasso_genes]
+    X_expr_lasso = Z[:, top]
+    X_stack = None
+    if have_emb.all():
+        Emb_all = np.stack([emb_line[ln] for ln in vl])
+        X_stack = (Emb_all - Emb_all.mean(0)) / np.where(Emb_all.std(0) > 0, Emb_all.std(0), 1.0)
+    reps_full = {"expr": (X_expr, X_expr_lasso)}
+    if X_stack is not None:
+        reps_full["stack"] = (X_stack, X_stack)
+    alphas = np.logspace(-2, 5, 15)
+
     Vn = V.to_numpy(dtype=float)
     rng = np.random.default_rng(SEED)
-    preds = {m: np.full((n_l, n_d), np.nan) for m in ("mean", "knn", "pca_adj", "nmf_adj", "stack_base", "tahoe_prolif", "tahoe_n_de", *gen_prolif)}
+    preds = {m: np.full((n_l, n_d), np.nan) for m in ("mean", "knn", "pca_adj", "nmf_adj", "stack_base", "tahoe_prolif", "tahoe_n_de", *gen_prolif,
+                                                       *readout_hallmark, *[f"szalai_{s_}" for s_ in resp_z],
+                                                       *[f"{pen}_{r_}" for r_ in reps_full for pen in ("ridge", "lasso")])}
     obs = np.full((n_l, n_d), np.nan)
     ceil_a, ceil_b = np.full((n_l, n_d), np.nan), np.full((n_l, n_d), np.nan)
     for i in range(n_l):
@@ -221,9 +289,31 @@ def main() -> None:
             R_ = np.nan_to_num(resid_tr[[np.where(train == o)[0][0] for o in ok]])
             beta = np.linalg.pinv(X) @ R_
             preds[name][i] = np.concatenate([[1.0], z[k][i]]) @ beta
-        for name, S in (("tahoe_prolif", tahoe_prolif), ("tahoe_n_de", tahoe_n_de), *gen_prolif.items()):
+        for name, S in (("tahoe_prolif", tahoe_prolif), ("tahoe_n_de", tahoe_n_de), *gen_prolif.items(), *readout_hallmark.items()):
             with np.errstate(invalid="ignore"):
                 preds[name][i] = S[i] - np.nanmean(S[train], axis=0)
+        # supervised L2 readout (szalai): response profile -> line-specific viability, fit on training pairs
+        for src, Zr in resp_z.items():
+            tr_pairs = np.isfinite(resid_tr)
+            Xtr = Zr[train][tr_pairs]
+            if len(Xtr) >= 20:
+                from sklearn.linear_model import Ridge
+
+                model = Ridge(alpha=1.0).fit(Xtr, resid_tr[tr_pairs])
+                preds[f"szalai_{src}"][i] = model.predict(Zr[i])
+        # per-drug L1 / L2 on the full representations
+        for r_, (Xr, Xl) in reps_full.items():
+            for j in range(n_d):
+                ok = train[np.isfinite(resid_tr[:, j])]
+                if len(ok) < MIN_LINES:
+                    continue
+                yj = Vn[ok, j] - dmean[j]
+                preds[f"ridge_{r_}"][i, j] = RidgeCV(alphas=alphas).fit(Xr[ok], yj).predict(Xr[[i]])[0]
+                try:
+                    preds[f"lasso_{r_}"][i, j] = LassoCV(cv=3, alphas=np.logspace(-3, 1, 15), max_iter=3000, random_state=SEED).fit(Xl[ok], yj).predict(Xl[[i]])[0]
+                except Exception:  # noqa: BLE001 -- a degenerate fold leaves the cell empty
+                    pass
+        log(f"fold {i + 1}/{n_l} {vl[i]}")
 
     rows = []
     r_ceil = masked_corr_cols(ceil_a, ceil_b)
@@ -246,16 +336,37 @@ def main() -> None:
     m = np.isfinite(Vn)
     r_global_mean = float(np.corrcoef(dm_pred[m], Vn[m])[0, 1])
 
+    # the August lineage's interaction score: each line's mean over its drugs removed from observed and predicted
+    with np.errstate(invalid="ignore"):
+        obs_int = obs - np.nanmean(obs, axis=1, keepdims=True)
+    rows_int = []
+    for m, P in preds.items():
+        with np.errstate(invalid="ignore"):
+            Pi = P - np.nanmean(P, axis=1, keepdims=True)
+        r = masked_corr_cols(Pi, obs_int) if m != "mean" else np.full(n_d, np.nan)
+        for j, d in enumerate(vd):
+            rows_int.append({"drug": d, "model": m, "r_interaction": r[j]})
+    ci_a = ceil_a - np.nanmean(ceil_a, axis=1, keepdims=True)
+    ci_b = ceil_b - np.nanmean(ceil_b, axis=1, keepdims=True)
+    r_ceil_int = masked_corr_cols(ci_a, ci_b)
+    per_int = pd.DataFrame(rows_int)
+    summ_int = per_int.groupby("model").agg(mean_r_interaction=("r_interaction", "mean"), median=("r_interaction", "median"), n_drugs=("r_interaction", "count"))
+    summ_int.loc["ceiling_split_half", ["mean_r_interaction", "median", "n_drugs"]] = [np.nanmean(r_ceil_int), np.nanmedian(r_ceil_int), int(np.isfinite(r_ceil_int).sum())]
+    summ_int["frac_of_ceiling"] = summ_int["mean_r_interaction"] / np.nanmean(r_ceil_int)
+    summ_int.round(4).to_csv(args.out / "rung4_summary_interaction.csv")
+
     summ = per.groupby("model").agg(mean_r=("r", "mean"), median_r=("r", "median"), n_drugs=("r", "count"),
                                     frac_drugs_r_gt_0=("r", lambda s: float((s > 0).mean())),
                                     mean_r_line_shuffled=("r_line_shuffled", "mean"))
     summ.loc["ceiling_split_half", ["mean_r", "median_r", "n_drugs"]] = [np.nanmean(r_ceil), np.nanmedian(r_ceil), int(np.isfinite(r_ceil).sum())]
     summ["frac_of_ceiling"] = summ["mean_r"] / np.nanmean(r_ceil)
     summ.loc["drug_mean_global_r_with_V", "mean_r"] = r_global_mean
-    summ = summ.reindex(["ceiling_split_half", "mean", "knn", "pca_adj", "nmf_adj", "stack_base", "tahoe_prolif", "tahoe_n_de",
-                         *sorted(gen_prolif), "drug_mean_global_r_with_V"]).round(4)
+    order = ["ceiling_split_half", "mean", "knn", "pca_adj", "nmf_adj", "stack_base", "tahoe_prolif", "tahoe_n_de", *sorted(gen_prolif)]
+    order += [m for m in preds if m not in order] + ["drug_mean_global_r_with_V"]
+    summ = summ.reindex(order).round(4)
     summ.to_csv(args.out / "rung4_summary.csv")
     log("summary (per-drug r across held-out lines, mean over drugs):\n" + summ.to_string())
+    log("interaction score (line mean removed):\n" + summ_int.reindex([o for o in order if o in summ_int.index]).round(4).to_string())
     (args.out / "run.json").write_text(json.dumps({"lines": vl, "n_drugs": n_d, "k": K_NEIGHBOURS, "n_components": N_COMPONENTS,
                                                    "proliferation_genes": list(PROLIFERATION), "finished": time.strftime("%Y-%m-%d %H:%M:%S")}, indent=2))
 
