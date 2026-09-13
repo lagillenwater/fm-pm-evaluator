@@ -17,8 +17,10 @@ INTO VIABILITY:
     knn             mean response of the 5 lines nearest in baseline expression
     pca, nmf        rung 1's encode -> shift -> decode departure added to the mean
     stack_base      the base Stack encoder's embedding of the line's real DMSO cells (rung 2),
-                    10 PCs, gene-wise OLS of the response departure on them, added to the mean
-                    (the base checkpoint has no decoder, so this is its only form)
+                    all 1,600 dimensions, mapped into gene space by a ridge from the centred
+                    embedding to the response departures fit on the training lines (one fixed
+                    penalty, no tuning), added to the mean -- the base checkpoint has no decoder,
+                    so the map into gene by line space is fit here, leave-line-out
     stack_cytokine, stack_sciplex   in-context generation on real cells (rung 1's arrays)
     measured        the line's actual Tahoe response -- the reference: what the readout can do
                     when the response is known
@@ -149,9 +151,7 @@ def predicted_responses(Y: np.ndarray, E: np.ndarray, lines: list[str], emb_line
     z_stack = None
     have = np.array([ln in emb_line for ln in lines])
     if have.all():
-        from sklearn.decomposition import PCA
-
-        z_stack = PCA(N_COMPONENTS, random_state=0).fit_transform(np.stack([emb_line[ln] for ln in lines]))
+        z_stack = np.stack([emb_line[ln] for ln in lines]).astype(np.float64)  # all 1,600 dimensions
     out = {r: np.full((len(keep_lines), n_d, n_g), np.nan, dtype=np.float32) for r in ("mean", "knn", "pca", "nmf", "stack_base")}
     valid = np.array([ln not in DROP_LINES and np.isfinite(Y[k]).any() for k, ln in enumerate(lines)])
     with np.errstate(invalid="ignore"):
@@ -170,10 +170,15 @@ def predicted_responses(Y: np.ndarray, E: np.ndarray, lines: list[str], emb_line
             fitted = (X @ beta).reshape(len(train), n_d, N_COMPONENTS) - z[k][train][:, None, :]
             out[k][o] = full_mean + latent[k].decode_shift((t_hat - z[k][i]) - fitted.mean(0), n_g)
         if z_stack is not None:
-            dep = np.nan_to_num(Y[train] - mean_d)  # (train, drug, gene) departures
+            # ridge from the full centred embedding to every (drug, gene) departure, fit on the training
+            # lines, one fixed penalty (the mean squared norm of a training line's embedding: penalty 1
+            # on norm-scaled embeddings), no tuning. Dual form: 1,600 dimensions, ~36 lines.
+            dep = np.nan_to_num(Y[train] - mean_d).reshape(len(train), -1)  # (train, drug*gene)
             Xc = z_stack[train] - z_stack[train].mean(0)
-            beta = np.linalg.pinv(Xc) @ dep.reshape(len(train), -1)
-            out["stack_base"][o] = full_mean + ((z_stack[i] - z_stack[train].mean(0)) @ beta).reshape(n_d, n_g)
+            K = Xc @ Xc.T
+            lam = np.trace(K) / len(train)
+            w = np.linalg.solve(K + lam * np.eye(len(train)), (z_stack[i] - z_stack[train].mean(0)) @ Xc.T)
+            out["stack_base"][o] = full_mean + (w @ dep).reshape(n_d, n_g)
         log(f"  predicted responses {o + 1}/{len(keep_lines)} {lines[i]}")
     for name, arr in gen.items():
         out[name] = arr[keep_lines]
